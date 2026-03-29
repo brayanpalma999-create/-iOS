@@ -1,0 +1,240 @@
+name: iOS Build And Distribute
+
+on:
+  workflow_dispatch:
+    inputs:
+      distribution:
+        description: "ad-hoc (instalacion directa en iPhone) o testflight"
+        required: true
+        default: "ad-hoc"
+        type: choice
+        options:
+          - ad-hoc
+          - testflight
+      build_name:
+        description: "Version visible, ejemplo 1.0.0"
+        required: false
+        default: "1.0.0"
+      build_number:
+        description: "Build number (entero), por defecto usa run number"
+        required: false
+        default: ""
+
+jobs:
+  build-ios:
+    runs-on: macos-14
+    env:
+      FLUTTER_VERSION: "3.41.6"
+      KEYCHAIN_PATH: ${{ runner.temp }}/atob-signing.keychain-db
+      CERT_PATH: ${{ runner.temp }}/ios_cert.p12
+      PROFILE_PATH: ${{ runner.temp }}/profile.mobileprovision
+      PROFILE_PLIST_PATH: ${{ runner.temp }}/profile.plist
+      ARCHIVE_PATH: ${{ github.workspace }}/build/ios/archive/Runner.xcarchive
+      EXPORT_PATH: ${{ github.workspace }}/build/ios/ipa
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Flutter Pub Get
+        run: flutter pub get
+
+      - name: Validate Required Secrets
+        env:
+          IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          for name in IOS_CERTIFICATE_P12_BASE64 IOS_CERTIFICATE_PASSWORD IOS_PROVISIONING_PROFILE_BASE64 IOS_TEAM_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing required secret: $name"
+              exit 1
+            fi
+          done
+
+      - name: Install Signing Certificate And Provisioning Profile
+        env:
+          IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          IOS_BUNDLE_IDENTIFIER_SECRET: ${{ secrets.IOS_BUNDLE_IDENTIFIER }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          KEYCHAIN_PASSWORD: ${{ secrets.IOS_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${KEYCHAIN_PASSWORD:-}" ]; then
+            KEYCHAIN_PASSWORD="atob_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          fi
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+
+          echo -n "$IOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$CERT_PATH"
+          echo -n "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$IOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST_PATH"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" "$PROFILE_PLIST_PATH")
+          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print Name" "$PROFILE_PLIST_PATH")
+          PROFILE_APP_ID=$(/usr/libexec/PlistBuddy -c "Print Entitlements:application-identifier" "$PROFILE_PLIST_PATH")
+          PROFILE_BUNDLE_ID=${PROFILE_APP_ID#${IOS_TEAM_ID}.}
+
+          cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+
+          IOS_BUNDLE_IDENTIFIER="$IOS_BUNDLE_IDENTIFIER_SECRET"
+          if [ -z "${IOS_BUNDLE_IDENTIFIER:-}" ]; then
+            IOS_BUNDLE_IDENTIFIER="$PROFILE_BUNDLE_ID"
+          fi
+
+          if [ "$IOS_BUNDLE_IDENTIFIER" != "$PROFILE_BUNDLE_ID" ]; then
+            echo "Bundle ID mismatch."
+            echo "Profile bundle id: $PROFILE_BUNDLE_ID"
+            echo "Secret bundle id : $IOS_BUNDLE_IDENTIFIER"
+            exit 1
+          fi
+
+          echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
+          echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
+          echo "IOS_BUNDLE_IDENTIFIER=$IOS_BUNDLE_IDENTIFIER" >> "$GITHUB_ENV"
+
+      - name: Normalize Build Number
+        env:
+          INPUT_BUILD_NUMBER: ${{ github.event.inputs.build_number }}
+        run: |
+          set -euo pipefail
+          BUILD_NUMBER="$INPUT_BUILD_NUMBER"
+          if [ -z "$BUILD_NUMBER" ]; then
+            BUILD_NUMBER="${GITHUB_RUN_NUMBER}"
+          fi
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
+
+      - name: Patch Bundle Identifier In Xcode Project
+        run: |
+          set -euo pipefail
+          sed -i '' "s/PRODUCT_BUNDLE_IDENTIFIER = [^;]*;/PRODUCT_BUNDLE_IDENTIFIER = ${IOS_BUNDLE_IDENTIFIER};/g" ios/Runner.xcodeproj/project.pbxproj
+
+      - name: Build Flutter iOS (no codesign)
+        env:
+          BUILD_NAME: ${{ github.event.inputs.build_name }}
+        run: |
+          set -euo pipefail
+          flutter build ios --release --no-codesign --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER"
+
+      - name: Archive Signed App
+        env:
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          rm -rf "$ARCHIVE_PATH"
+          xcodebuild \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$ARCHIVE_PATH" \
+            DEVELOPMENT_TEAM="$IOS_TEAM_ID" \
+            PRODUCT_BUNDLE_IDENTIFIER="$IOS_BUNDLE_IDENTIFIER" \
+            CODE_SIGN_STYLE=Manual \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            archive
+
+      - name: Create ExportOptions.plist
+        env:
+          DISTRIBUTION: ${{ github.event.inputs.distribution }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          METHOD="ad-hoc"
+          if [ "$DISTRIBUTION" = "testflight" ]; then
+            METHOD="app-store"
+          fi
+
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>compileBitcode</key>
+            <false/>
+            <key>destination</key>
+            <string>export</string>
+            <key>method</key>
+            <string>${METHOD}</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>teamID</key>
+            <string>${IOS_TEAM_ID}</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${IOS_BUNDLE_IDENTIFIER}</key>
+              <string>${PROFILE_NAME}</string>
+            </dict>
+            <key>stripSwiftSymbols</key>
+            <true/>
+            <key>thinning</key>
+            <string>&lt;none&gt;</string>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Export IPA
+        run: |
+          set -euo pipefail
+          rm -rf "$EXPORT_PATH"
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportPath "$EXPORT_PATH" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
+          ls -la "$EXPORT_PATH"
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa-${{ github.event.inputs.distribution }}-build-${{ env.BUILD_NUMBER }}
+          path: build/ios/ipa/*.ipa
+          retention-days: 14
+
+      - name: Upload To TestFlight
+        if: ${{ github.event.inputs.distribution == 'testflight' }}
+        env:
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+          APPSTORE_API_PRIVATE_KEY_BASE64: ${{ secrets.APPSTORE_API_PRIVATE_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+
+          for name in APPSTORE_API_KEY_ID APPSTORE_API_ISSUER_ID APPSTORE_API_PRIVATE_KEY_BASE64; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing required secret for TestFlight: $name"
+              exit 1
+            fi
+          done
+
+          KEY_DIR="$HOME/.appstoreconnect/private_keys"
+          mkdir -p "$KEY_DIR"
+          KEY_PATH="$KEY_DIR/AuthKey_${APPSTORE_API_KEY_ID}.p8"
+          echo -n "$APPSTORE_API_PRIVATE_KEY_BASE64" | base64 --decode > "$KEY_PATH"
+
+          IPA_PATH=$(ls "$EXPORT_PATH"/*.ipa | head -n 1)
+          xcrun iTMSTransporter \
+            -m upload \
+            -assetFile "$IPA_PATH" \
+            -apiKey "$APPSTORE_API_KEY_ID" \
+            -apiIssuer "$APPSTORE_API_ISSUER_ID" \
+            -verbose

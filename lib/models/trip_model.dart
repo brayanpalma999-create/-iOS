@@ -1,0 +1,108 @@
+import "location_model.dart";
+
+class TripModel {
+  const TripModel({
+    required this.id,
+    required this.driverId,
+    required this.origin,
+    required this.destination,
+    required this.status,
+    required this.createdAt,
+    this.distanceMiles = 0,
+    this.durationMinutes = 0,
+    this.fareUsd = 0,
+    this.routePoints = const <LocationModel>[],
+    this.originLocation,
+    this.destinationLocation,
+  });
+
+  final String id;
+  final String driverId;
+  final String origin;
+  final String destination;
+  final String status;
+  final DateTime createdAt;
+  final double distanceMiles;
+  final double durationMinutes;
+  final double fareUsd;
+  final List<LocationModel> routePoints;
+  final LocationModel? originLocation;
+  final LocationModel? destinationLocation;
+
+  TripModel copyWith({
+    String? id,
+    String? driverId,
+    String? origin,
+    String? destination,
+    String? status,
+    DateTime? createdAt,
+    double? distanceMiles,
+    double? durationMinutes,
+    double? fareUsd,
+    List<LocationModel>? routePoints,
+    LocationModel? originLocation,
+    LocationModel? destinationLocation,
+  }) {
+    return TripModel(
+      id: id ?? this.id,
+      driverId: driverId ?? this.driverId,
+      origin: origin ?? this.origin,
+      destination: destination ?? this.destination,
+      status: status ?? this.status,
+      createdAt: createdAt ?? this.createdAt,
+      distanceMiles: distanceMiles ?? this.distanceMiles,
+      durationMinutes: durationMinutes ?? this.durationMinutes,
+      fareUsd: fareUsd ?? this.fareUsd,
+      routePoints: routePoints ?? this.routePoints,
+      originLocation: originLocation ?? this.originLocation,
+      destinationLocation: destinationLocation ?? this.destinationLocation,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    "id": id,
+    "driverId": driverId,
+    "origin": origin,
+    "destination": destination,
+    "status": status,
+    "createdAt": createdAt.toIso8601String(),
+    "distanceMiles": distanceMiles,
+    "durationMinutes": durationMinutes,
+    "fareUsd": fareUsd,
+    "routePoints": routePoints.map((p) => p.toJson()).toList(),
+    "originLocation": originLocation?.toJson(),
+    "destinationLocation": destinationLocation?.toJson(),
+  };
+
+  factory TripModel.fromJson(Map<String, dynamic> json) {
+    return TripModel(
+      id: json["id"].toString(),
+      driverId: json["driverId"].toString(),
+      origin: json["origin"].toString(),
+      destination: json["destination"].toString(),
+      status: json["status"]?.toString() ?? "assigned",
+      createdAt:
+          DateTime.tryParse(json["createdAt"]?.toString() ?? "") ??
+          DateTime.now(),
+      distanceMiles: (json["distanceMiles"] as num?)?.toDouble() ?? 0,
+      durationMinutes: (json["durationMinutes"] as num?)?.toDouble() ?? 0,
+      fareUsd: (json["fareUsd"] as num?)?.toDouble() ?? 0,
+      routePoints:
+          (json["routePoints"] as List?)
+              ?.whereType<Map>()
+              .map((p) => LocationModel.fromJson(p.cast<String, dynamic>()))
+              .toList() ??
+          const <LocationModel>[],
+      originLocation: (json["originLocation"] is Map)
+          ? LocationModel.fromJson(
+              (json["originLocation"] as Map).cast<String, dynamic>(),
+            )
+          : null,
+      destinationLocation: (json["destinationLocation"] is Map)
+          ? LocationModel.fromJson(
+              (json["destinationLocation"] as Map).cast<String, dynamic>(),
+            )
+          : null,
+    );
+  }
+}

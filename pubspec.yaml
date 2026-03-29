@@ -1,0 +1,40 @@
+﻿name: atob_app
+description: AtoB dispatch and intercom platform
+publish_to: none
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  provider: ^6.1.2
+  socket_io_client: ^3.1.2
+  flutter_map: ^8.2.2
+  latlong2: ^0.9.1
+  geolocator: ^14.0.2
+  just_audio: ^0.10.5
+  flutter_audio_capture: ^1.1.11
+  vibration: ^3.1.4
+  google_fonts: ^6.3.2
+  permission_handler: ^12.0.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+dependency_overrides:
+  path_provider_android: 2.2.20
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/sounds/ptt_on.wav
+    - assets/sounds/ptt_off.wav
+    - assets/sounds/private_beep.wav
+    - assets/sounds/busy_beep.wav
+    - assets/icons/
+    - assets/images/
