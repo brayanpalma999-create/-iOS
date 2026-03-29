@@ -139,12 +139,12 @@ class IntercomProvider extends ChangeNotifier {
   }
 
   String? get _senderId {
-    if (_selfId != null && _selfId!.isNotEmpty) {
-      return _selfId;
-    }
     final socketId = _socketService.socketId;
     if (socketId != null && socketId.isNotEmpty) {
       return socketId;
+    }
+    if (_selfId != null && _selfId!.isNotEmpty) {
+      return _selfId;
     }
     return null;
   }
@@ -217,6 +217,15 @@ class IntercomProvider extends ChangeNotifier {
       if (busyFromOther && !staleBusy) {
         await _beepService.playBusyBeep();
         return;
+      }
+      // Ask backend to clear stale locks only when the channel appears idle.
+      if (staleBusy) {
+        _socketService.emit("voice:stop", {
+          "reason": "client-stale-busy-reset",
+          "fromId": senderId,
+          "senderId": senderId,
+          "senderRole": _selfRole,
+        });
       }
       _clearIncomingSpeaker();
     }
@@ -444,26 +453,27 @@ class IntercomProvider extends ChangeNotifier {
   }
 
   Future<void> _configureAudioSession() async {
-    if (_audioSessionReady) return;
     try {
       final session = await AudioSession.instance;
-      await session.configure(
-        AudioSessionConfiguration(
-          avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
-          avAudioSessionCategoryOptions:
-              AVAudioSessionCategoryOptions.defaultToSpeaker |
-              AVAudioSessionCategoryOptions.allowBluetooth |
-              AVAudioSessionCategoryOptions.mixWithOthers,
-          avAudioSessionMode: AVAudioSessionMode.voiceChat,
-          androidAudioAttributes: AndroidAudioAttributes(
-            contentType: AndroidAudioContentType.speech,
-            usage: AndroidAudioUsage.voiceCommunication,
+      if (!_audioSessionReady) {
+        await session.configure(
+          AudioSessionConfiguration(
+            avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+            avAudioSessionCategoryOptions:
+                AVAudioSessionCategoryOptions.defaultToSpeaker |
+                AVAudioSessionCategoryOptions.allowBluetooth |
+                AVAudioSessionCategoryOptions.mixWithOthers,
+            avAudioSessionMode: AVAudioSessionMode.voiceChat,
+            androidAudioAttributes: AndroidAudioAttributes(
+              contentType: AndroidAudioContentType.speech,
+              usage: AndroidAudioUsage.voiceCommunication,
+            ),
+            androidAudioFocusGainType:
+                AndroidAudioFocusGainType.gainTransientMayDuck,
+            androidWillPauseWhenDucked: false,
           ),
-          androidAudioFocusGainType:
-              AndroidAudioFocusGainType.gainTransientMayDuck,
-          androidWillPauseWhenDucked: false,
-        ),
-      );
+        );
+      }
       await session.setActive(true);
       await _incomingPlayer.setVolume(1.0);
       _audioSessionReady = true;
@@ -720,6 +730,7 @@ class IntercomProvider extends ChangeNotifier {
   Future<void> _drainIncomingQueue() async {
     if (_drainingIncoming || _isMuted) return;
     _drainingIncoming = true;
+    await _configureAudioSession();
     while (_incomingQueue.isNotEmpty && !_isMuted) {
       final frame = _incomingQueue.removeFirst();
       final wav = _pcmToWavMono(
