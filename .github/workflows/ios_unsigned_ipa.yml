@@ -1,0 +1,79 @@
+name: iOS Unsigned IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_name:
+        description: "Version visible, ejemplo 1.0.0"
+        required: false
+        default: "1.0.0"
+      build_number:
+        description: "Build number (entero), por defecto usa run number"
+        required: false
+        default: ""
+  push:
+    branches:
+      - main
+
+jobs:
+  build-unsigned-ipa:
+    runs-on: macos-14
+    env:
+      FLUTTER_VERSION: "3.41.6"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Flutter Pub Get
+        run: flutter pub get
+
+      - name: Resolve Build Number
+        env:
+          INPUT_BUILD_NUMBER: ${{ github.event.inputs.build_number }}
+        run: |
+          set -euo pipefail
+          BUILD_NUMBER="$INPUT_BUILD_NUMBER"
+          if [ -z "$BUILD_NUMBER" ]; then
+            BUILD_NUMBER="${GITHUB_RUN_NUMBER}"
+          fi
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
+
+      - name: Build iOS No Codesign
+        env:
+          BUILD_NAME: ${{ github.event.inputs.build_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BUILD_NAME:-}" ]; then
+            BUILD_NAME="1.0.0"
+          fi
+          flutter build ios --release --no-codesign --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER"
+
+      - name: Package Unsigned IPA
+        run: |
+          set -euo pipefail
+          APP_PATH="build/ios/iphoneos/Runner.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "No se encontro $APP_PATH"
+            exit 1
+          fi
+          rm -rf build/ios/unsigned_ipa
+          mkdir -p build/ios/unsigned_ipa/Payload
+          cp -R "$APP_PATH" build/ios/unsigned_ipa/Payload/Runner.app
+          cd build/ios/unsigned_ipa
+          zip -r ../Runner-unsigned.ipa Payload
+          cd -
+
+      - name: Upload Unsigned IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unsigned-ipa-build-${{ env.BUILD_NUMBER }}
+          path: build/ios/Runner-unsigned.ipa
+          retention-days: 14

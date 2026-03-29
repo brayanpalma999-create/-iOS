@@ -70,6 +70,10 @@ En `Actions -> iOS Build And Distribute -> Run workflow`:
 - `distribution = ad-hoc` para instalar directo en iPhone (con UDID registrado).
 - `distribution = testflight` para subir a TestFlight.
 
+Si aun no tienes certificados/perfiles, usa workflow alterno:
+
+- `iOS Unsigned IPA` (sin secrets) para generar `Runner-unsigned.ipa`.
+
 ## 5) Instalar en iPhone
 
 ### Opcion A: ad-hoc
@@ -77,6 +81,12 @@ En `Actions -> iOS Build And Distribute -> Run workflow`:
 1. Descarga el artifact `.ipa` del job.
 2. Instala con Apple Configurator 2 o Transporter en Mac.
 3. El iPhone debe estar incluido en el provisioning profile.
+
+### Opcion A2: unsigned (sin certificados, para pruebas)
+
+1. Corre `iOS Unsigned IPA`.
+2. Descarga `Runner-unsigned.ipa` del artifact.
+3. Instala con Sideloadly o AltStore (firma local con tu Apple ID).
 
 ### Opcion B: TestFlight
 
