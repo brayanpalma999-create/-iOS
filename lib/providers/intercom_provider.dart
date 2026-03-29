@@ -4,6 +4,7 @@ import "dart:convert";
 import "dart:math";
 import "dart:typed_data";
 
+import "package:audio_session/audio_session.dart";
 import "package:flutter/material.dart";
 import "package:just_audio/just_audio.dart";
 import "package:permission_handler/permission_handler.dart";
@@ -28,10 +29,15 @@ class IntercomPeer {
 }
 
 class _IncomingFrame {
-  const _IncomingFrame({required this.pcm, required this.sampleRate});
+  const _IncomingFrame({
+    required this.pcm,
+    required this.sampleRate,
+    required this.bitDepth,
+  });
 
   final Uint8List pcm;
   final int sampleRate;
+  final int bitDepth;
 }
 
 class IntercomProvider extends ChangeNotifier {
@@ -42,12 +48,18 @@ class IntercomProvider extends ChangeNotifier {
   }) : _socketService = socketService,
        _beepService = beepService,
        _audioCaptureService = audioCaptureService {
+    unawaited(_configureAudioSession());
     _subscribeSocket();
     _connectionSubscription = _socketService.connectionState.listen((
       connected,
     ) {
       if (connected) {
         _registerOnServer();
+      } else {
+        if (_isTransmitting) {
+          unawaited(releasePtt());
+        }
+        _clearIncomingSpeaker(notify: true);
       }
     });
   }
@@ -80,14 +92,18 @@ class IntercomProvider extends ChangeNotifier {
   final List<IntercomPeer> _availableDrivers = <IntercomPeer>[];
   final ListQueue<_IncomingFrame> _incomingQueue = ListQueue<_IncomingFrame>();
   final BytesBuilder _incomingBuffer = BytesBuilder(copy: false);
+  final BytesBuilder _outgoingBuffer = BytesBuilder(copy: false);
   int _pendingIncomingSampleRate = 16000;
+  int _pendingIncomingBitDepth = 16;
   StreamSubscription<Uint8List>? _captureSubscription;
   StreamSubscription<bool>? _connectionSubscription;
   Timer? _incomingFlushTimer;
+  Timer? _outgoingFlushTimer;
   Timer? _pttSafetyTimer;
   Timer? _pttElapsedTimer;
   Timer? _incomingBusyGuardTimer;
   bool _drainingIncoming = false;
+  bool _audioSessionReady = false;
 
   bool get isTransmitting => _isTransmitting;
   bool get channelBusy => _channelBusy;
@@ -123,11 +139,14 @@ class IntercomProvider extends ChangeNotifier {
   }
 
   String? get _senderId {
+    if (_selfId != null && _selfId!.isNotEmpty) {
+      return _selfId;
+    }
     final socketId = _socketService.socketId;
     if (socketId != null && socketId.isNotEmpty) {
       return socketId;
     }
-    return _selfId;
+    return null;
   }
 
   String displayNameForTarget(String? id) {
@@ -206,6 +225,7 @@ class IntercomProvider extends ChangeNotifier {
       await _beepService.playPttOff();
       return;
     }
+    await _configureAudioSession();
     final micStatus = await Permission.microphone.status;
     if (!micStatus.isGranted) {
       final requested = await Permission.microphone.request();
@@ -221,6 +241,8 @@ class IntercomProvider extends ChangeNotifier {
     _pendingReleaseDuringTransition = false;
     final sessionId = _nextClientSessionId();
     _activeClientSessionId = sessionId;
+    _outgoingBuffer.clear();
+    _outgoingFlushTimer?.cancel();
     var captureStarted = false;
 
     try {
@@ -238,11 +260,13 @@ class IntercomProvider extends ChangeNotifier {
       if (await Vibration.hasVibrator()) {
         Vibration.vibrate(duration: 35, amplitude: 110);
       }
-
-      // Defensive reset for stale locks in backend before opening a new burst.
-      _socketService.emit("voice:stop", _stopPayload(sessionId));
-      await Future<void>.delayed(const Duration(milliseconds: 30));
       _socketService.emit("voice:start", _startPayload(sessionId));
+
+      _outgoingFlushTimer = Timer.periodic(const Duration(milliseconds: 55), (
+        _,
+      ) {
+        _flushOutgoing(sessionId: sessionId);
+      });
 
       _pttElapsedTimer?.cancel();
       _pttElapsedTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
@@ -254,7 +278,7 @@ class IntercomProvider extends ChangeNotifier {
 
       _captureSubscription = _audioCaptureService.chunks.listen(
         (chunk) {
-          _socketService.emit("voice:chunk", _chunkPayload(chunk, sessionId));
+          _queueOutgoing(chunk);
         },
         onError: (error) {
           _lastErrorMessage = "Error de audio: ${_errorLabel(error)}";
@@ -264,7 +288,7 @@ class IntercomProvider extends ChangeNotifier {
       );
 
       _pttSafetyTimer?.cancel();
-      _pttSafetyTimer = Timer(const Duration(seconds: 45), () {
+      _pttSafetyTimer = Timer(const Duration(seconds: 20), () {
         unawaited(releasePtt());
       });
     } catch (e) {
@@ -304,6 +328,8 @@ class IntercomProvider extends ChangeNotifier {
     _pendingReleaseDuringTransition = false;
     _pttSafetyTimer?.cancel();
     _pttSafetyTimer = null;
+    _outgoingFlushTimer?.cancel();
+    _outgoingFlushTimer = null;
 
     final sessionId = _activeClientSessionId;
     try {
@@ -327,12 +353,16 @@ class IntercomProvider extends ChangeNotifier {
         // Ensure stop event is still emitted.
       }
 
+      if (sessionId != null) {
+        _flushOutgoing(sessionId: sessionId, force: true);
+      }
       _socketService.emit("voice:stop", _stopPayload(sessionId));
       _socketService.emit("voice:end", _stopPayload(sessionId));
       await _beepService.playPttOff();
     } finally {
       _isTransmitting = false;
       _activeClientSessionId = null;
+      _outgoingBuffer.clear();
       notifyListeners();
       _pttTransitioning = false;
     }
@@ -364,6 +394,8 @@ class IntercomProvider extends ChangeNotifier {
       "senderRole": _selfRole,
       "senderName": _selfName,
       "sampleRate": _audioCaptureService.sampleRate,
+      "bitDepth": _audioCaptureService.bitDepth,
+      "encoding": "pcm_s16le",
       "clientSessionId": sessionId,
     };
   }
@@ -372,7 +404,7 @@ class IntercomProvider extends ChangeNotifier {
     final private = isPrivate;
     final senderId = _senderId;
     return {
-      "payload": chunk.toList(),
+      "payload": base64Encode(chunk),
       "channel": private ? "private" : "global",
       "channelNumber": private ? 2 : 1,
       "private": private,
@@ -384,6 +416,8 @@ class IntercomProvider extends ChangeNotifier {
       "senderRole": _selfRole,
       "senderName": _selfName,
       "sampleRate": _audioCaptureService.sampleRate,
+      "bitDepth": _audioCaptureService.bitDepth,
+      "encoding": "pcm_s16le",
       "clientSessionId": sessionId,
     };
   }
@@ -403,8 +437,57 @@ class IntercomProvider extends ChangeNotifier {
       "senderRole": _selfRole,
       "senderName": _selfName,
       "sampleRate": _audioCaptureService.sampleRate,
+      "bitDepth": _audioCaptureService.bitDepth,
+      "encoding": "pcm_s16le",
       "clientSessionId": sessionId,
     };
+  }
+
+  Future<void> _configureAudioSession() async {
+    if (_audioSessionReady) return;
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(
+        AudioSessionConfiguration(
+          avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+          avAudioSessionCategoryOptions:
+              AVAudioSessionCategoryOptions.defaultToSpeaker |
+              AVAudioSessionCategoryOptions.allowBluetooth |
+              AVAudioSessionCategoryOptions.mixWithOthers,
+          avAudioSessionMode: AVAudioSessionMode.voiceChat,
+          androidAudioAttributes: AndroidAudioAttributes(
+            contentType: AndroidAudioContentType.speech,
+            usage: AndroidAudioUsage.voiceCommunication,
+          ),
+          androidAudioFocusGainType:
+              AndroidAudioFocusGainType.gainTransientMayDuck,
+          androidWillPauseWhenDucked: false,
+        ),
+      );
+      await session.setActive(true);
+      await _incomingPlayer.setVolume(1.0);
+      _audioSessionReady = true;
+    } catch (_) {
+      // Keep app functional even if session tuning is unsupported on a device.
+    }
+  }
+
+  void _queueOutgoing(Uint8List chunk) {
+    if (chunk.isEmpty) return;
+    _outgoingBuffer.add(chunk);
+  }
+
+  void _flushOutgoing({required String sessionId, bool force = false}) {
+    if (_outgoingBuffer.length == 0) return;
+    if (!force && _outgoingBuffer.length < 1400) {
+      return;
+    }
+    final bytes = _outgoingBuffer.takeBytes();
+    if (bytes.isEmpty) return;
+    _socketService.emit(
+      "voice:chunk",
+      _chunkPayload(Uint8List.fromList(bytes), sessionId),
+    );
   }
 
   void _subscribeSocket() {
@@ -453,9 +536,10 @@ class IntercomProvider extends ChangeNotifier {
         );
         if (bytes == null || bytes.isEmpty) return;
         final sampleRate = _resolveSampleRate(data["sampleRate"]);
+        final bitDepth = _resolveBitDepth(data["bitDepth"]);
         _markIncomingSpeaker(data);
         _touchIncomingVoice();
-        _queueIncoming(bytes, sampleRate: sampleRate);
+        _queueIncoming(bytes, sampleRate: sampleRate, bitDepth: bitDepth);
         notifyListeners();
         return;
       }
@@ -463,7 +547,7 @@ class IntercomProvider extends ChangeNotifier {
       final bytes = _extractBytes(payload);
       if (bytes == null || bytes.isEmpty) return;
       _touchIncomingVoice();
-      _queueIncoming(bytes, sampleRate: 16000);
+      _queueIncoming(bytes, sampleRate: 16000, bitDepth: 16);
       notifyListeners();
     });
   }
@@ -592,25 +676,40 @@ class IntercomProvider extends ChangeNotifier {
         ? raw.toInt()
         : int.tryParse(raw?.toString() ?? "");
     if (parsed == null) return 16000;
-    return parsed.clamp(8000, 48000);
+    return parsed.clamp(8000, 48000).toInt();
   }
 
-  void _queueIncoming(Uint8List bytes, {required int sampleRate}) {
+  int _resolveBitDepth(dynamic raw) {
+    final parsed = raw is num
+        ? raw.toInt()
+        : int.tryParse(raw?.toString() ?? "");
+    if (parsed == 8) return 8;
+    if (parsed == 16) return 16;
+    return 16;
+  }
+
+  void _queueIncoming(
+    Uint8List bytes, {
+    required int sampleRate,
+    required int bitDepth,
+  }) {
     if (_isMuted) return;
     _pendingIncomingSampleRate = sampleRate;
+    _pendingIncomingBitDepth = bitDepth;
     _incomingBuffer.add(bytes);
     _incomingFlushTimer?.cancel();
-    _incomingFlushTimer = Timer(const Duration(milliseconds: 35), () {
+    _incomingFlushTimer = Timer(const Duration(milliseconds: 55), () {
       final frame = _incomingBuffer.takeBytes();
       if (frame.isEmpty) return;
       _incomingQueue.add(
         _IncomingFrame(
           pcm: Uint8List.fromList(frame),
           sampleRate: _pendingIncomingSampleRate,
+          bitDepth: _pendingIncomingBitDepth,
         ),
       );
-      if (_incomingQueue.length > 8) {
-        while (_incomingQueue.length > 5) {
+      if (_incomingQueue.length > 24) {
+        while (_incomingQueue.length > 16) {
           _incomingQueue.removeFirst();
         }
       }
@@ -623,11 +722,15 @@ class IntercomProvider extends ChangeNotifier {
     _drainingIncoming = true;
     while (_incomingQueue.isNotEmpty && !_isMuted) {
       final frame = _incomingQueue.removeFirst();
-      final wav = _pcmToWav8BitMono(frame.pcm, sampleRate: frame.sampleRate);
+      final wav = _pcmToWavMono(
+        frame.pcm,
+        sampleRate: frame.sampleRate,
+        bitDepth: frame.bitDepth,
+      );
       final uri = Uri.dataFromBytes(wav, mimeType: "audio/wav");
       try {
-        await _incomingPlayer.stop();
         await _incomingPlayer.setAudioSource(AudioSource.uri(uri));
+        await _incomingPlayer.setVolume(1.0);
         await _incomingPlayer.play();
       } catch (_) {
         // Continue with next frame on decode/playback failures.
@@ -636,9 +739,16 @@ class IntercomProvider extends ChangeNotifier {
     _drainingIncoming = false;
   }
 
-  Uint8List _pcmToWav8BitMono(Uint8List pcm, {required int sampleRate}) {
+  Uint8List _pcmToWavMono(
+    Uint8List pcm, {
+    required int sampleRate,
+    required int bitDepth,
+  }) {
     final dataLength = pcm.length;
     final fileSize = 36 + dataLength;
+    final bytesPerSample = (bitDepth / 8).toInt();
+    final blockAlign = bytesPerSample;
+    final byteRate = sampleRate * blockAlign;
     final header = ByteData(44)
       ..setUint32(0, 0x52494646, Endian.big) // RIFF
       ..setUint32(4, fileSize, Endian.little)
@@ -648,9 +758,9 @@ class IntercomProvider extends ChangeNotifier {
       ..setUint16(20, 1, Endian.little) // PCM
       ..setUint16(22, 1, Endian.little) // mono
       ..setUint32(24, sampleRate, Endian.little)
-      ..setUint32(28, sampleRate, Endian.little) // byteRate 8-bit mono
-      ..setUint16(32, 1, Endian.little) // blockAlign
-      ..setUint16(34, 8, Endian.little) // bitsPerSample
+      ..setUint32(28, byteRate, Endian.little)
+      ..setUint16(32, blockAlign, Endian.little)
+      ..setUint16(34, bitDepth, Endian.little)
       ..setUint32(36, 0x64617461, Endian.big) // data
       ..setUint32(40, dataLength, Endian.little);
     return Uint8List.fromList([...header.buffer.asUint8List(), ...pcm]);
@@ -673,12 +783,14 @@ class IntercomProvider extends ChangeNotifier {
     _pttElapsedTimer?.cancel();
     _incomingBusyGuardTimer?.cancel();
     _incomingFlushTimer?.cancel();
+    _outgoingFlushTimer?.cancel();
     await _captureSubscription?.cancel();
     _captureSubscription = null;
     _connectionSubscription?.cancel();
     _connectionSubscription = null;
     await releasePtt();
     _incomingBuffer.clear();
+    _outgoingBuffer.clear();
     _incomingQueue.clear();
     await _incomingPlayer.dispose();
     _audioCaptureService.dispose();

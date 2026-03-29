@@ -38,19 +38,8 @@ class AdminIntercom extends StatelessWidget {
                 ),
                 const SizedBox(height: 10),
                 Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
                   children: [
-                    Expanded(
-                      child: Text(
-                        intercom.activeSpeakerLabel == null
-                            ? "Hablando ahora: nadie"
-                            : "Hablando ahora: ${intercom.activeSpeakerLabel}",
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
                     IconButton.filledTonal(
                       onPressed: () =>
                           context.read<IntercomProvider>().toggleMuted(),
@@ -152,6 +141,17 @@ class AdminIntercom extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 20),
+        Text(
+          intercom.activeSpeakerLabel == null
+              ? "Hablando ahora: nadie"
+              : "Hablando ahora: ${intercom.activeSpeakerLabel}",
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: Colors.white70,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 8),
         Text(
           intercom.isTransmitting
               ? "Transmitiendo: ${intercom.transmitSeconds}s"
