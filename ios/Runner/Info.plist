@@ -53,6 +53,8 @@
 	<string>LaunchScreen</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>AtoB usa tu ubicacion para mapa en tiempo real y asignacion de viajes.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>AtoB usa tu ubicacion para mantener seguimiento del viaje cuando la app esta en segundo plano.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>AtoB usa tu ubicacion para actualizar posicion del driver durante la operacion.</string>
 	<key>NSLocationTemporaryUsageDescriptionDictionary</key>

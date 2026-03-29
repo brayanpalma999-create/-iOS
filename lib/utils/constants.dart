@@ -22,7 +22,7 @@ class AppConstants {
   static const tileSatelliteUrl =
       "https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12/tiles/256/{z}/{x}/{y}?access_token=$mapboxToken";
   static const tileFallbackUrl =
-      "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+      "https://tile.openstreetmap.fr/hot/{z}/{x}/{y}.png";
   static const appName = "AtoB";
   static const farePerMile = 2.25;
   static const minimumTripFare = 8.0;

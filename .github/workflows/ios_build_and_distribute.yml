@@ -131,9 +131,14 @@ jobs:
       - name: Build Flutter iOS (no codesign)
         env:
           BUILD_NAME: ${{ github.event.inputs.build_name }}
+          MAPBOX_TOKEN: ${{ secrets.MAPBOX_TOKEN }}
         run: |
           set -euo pipefail
-          flutter build ios --release --no-codesign --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER"
+          MAPBOX_DEFINE=""
+          if [ -n "${MAPBOX_TOKEN:-}" ]; then
+            MAPBOX_DEFINE="--dart-define=MAPBOX_TOKEN=$MAPBOX_TOKEN"
+          fi
+          flutter build ios --release --no-codesign --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" $MAPBOX_DEFINE
 
       - name: Archive Signed App
         env:

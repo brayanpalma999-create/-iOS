@@ -11,13 +11,20 @@ class PermissionService {
     if (!(Platform.isAndroid || Platform.isIOS)) return;
 
     await _requestIfNeeded(Permission.locationWhenInUse);
+    await Future<void>.delayed(const Duration(milliseconds: 180));
     await _requestIfNeeded(Permission.microphone);
+    await Future<void>.delayed(const Duration(milliseconds: 180));
     await _requestIfNeeded(Permission.notification);
   }
 
   static Future<void> _requestIfNeeded(Permission permission) async {
     final status = await permission.status;
-    if (status.isGranted || status.isLimited) return;
+    if (status.isGranted ||
+        status.isLimited ||
+        status.isRestricted ||
+        status.isPermanentlyDenied) {
+      return;
+    }
     await permission.request();
   }
 }

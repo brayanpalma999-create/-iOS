@@ -49,12 +49,17 @@ jobs:
       - name: Build iOS No Codesign
         env:
           BUILD_NAME: ${{ github.event.inputs.build_name }}
+          MAPBOX_TOKEN: ${{ secrets.MAPBOX_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${BUILD_NAME:-}" ]; then
             BUILD_NAME="1.0.0"
           fi
-          flutter build ios --release --no-codesign --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER"
+          MAPBOX_DEFINE=""
+          if [ -n "${MAPBOX_TOKEN:-}" ]; then
+            MAPBOX_DEFINE="--dart-define=MAPBOX_TOKEN=$MAPBOX_TOKEN"
+          fi
+          flutter build ios --release --no-codesign --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" $MAPBOX_DEFINE
 
       - name: Package Unsigned IPA
         run: |
