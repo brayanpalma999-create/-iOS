@@ -1,6 +1,7 @@
 import "dart:async";
 import "dart:collection";
 import "dart:convert";
+import "dart:io";
 import "dart:math";
 import "dart:typed_data";
 
@@ -104,6 +105,7 @@ class IntercomProvider extends ChangeNotifier {
   Timer? _incomingBusyGuardTimer;
   bool _drainingIncoming = false;
   bool _audioSessionReady = false;
+  int _incomingFileCursor = 0;
 
   bool get isTransmitting => _isTransmitting;
   bool get channelBusy => _channelBusy;
@@ -131,9 +133,6 @@ class IntercomProvider extends ChangeNotifier {
     final id = _activeSpeakerId;
     final name = _activeSpeakerName;
     if (id == null && (name == null || name.isEmpty)) return null;
-    if (name != null && name.isNotEmpty && id != null && id.isNotEmpty) {
-      return "$name (#$id)";
-    }
     if (name != null && name.isNotEmpty) return name;
     return id;
   }
@@ -271,7 +270,7 @@ class IntercomProvider extends ChangeNotifier {
       }
       _socketService.emit("voice:start", _startPayload(sessionId));
 
-      _outgoingFlushTimer = Timer.periodic(const Duration(milliseconds: 55), (
+      _outgoingFlushTimer = Timer.periodic(const Duration(milliseconds: 70), (
         _,
       ) {
         _flushOutgoing(sessionId: sessionId);
@@ -297,7 +296,7 @@ class IntercomProvider extends ChangeNotifier {
       );
 
       _pttSafetyTimer?.cancel();
-      _pttSafetyTimer = Timer(const Duration(seconds: 20), () {
+      _pttSafetyTimer = Timer(const Duration(seconds: 90), () {
         unawaited(releasePtt());
       });
     } catch (e) {
@@ -412,8 +411,11 @@ class IntercomProvider extends ChangeNotifier {
   Map<String, dynamic> _chunkPayload(Uint8List chunk, String sessionId) {
     final private = isPrivate;
     final senderId = _senderId;
+    final encoded = base64Encode(chunk);
     return {
-      "payload": base64Encode(chunk),
+      "payload": encoded,
+      "chunk": encoded,
+      "payloadEncoding": "base64",
       "channel": private ? "private" : "global",
       "channelNumber": private ? 2 : 1,
       "private": private,
@@ -461,16 +463,14 @@ class IntercomProvider extends ChangeNotifier {
             avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
             avAudioSessionCategoryOptions:
                 AVAudioSessionCategoryOptions.defaultToSpeaker |
-                AVAudioSessionCategoryOptions.allowBluetooth |
-                AVAudioSessionCategoryOptions.mixWithOthers,
+                AVAudioSessionCategoryOptions.allowBluetooth,
             avAudioSessionMode: AVAudioSessionMode.voiceChat,
             androidAudioAttributes: AndroidAudioAttributes(
               contentType: AndroidAudioContentType.speech,
               usage: AndroidAudioUsage.voiceCommunication,
             ),
-            androidAudioFocusGainType:
-                AndroidAudioFocusGainType.gainTransientMayDuck,
-            androidWillPauseWhenDucked: false,
+            androidAudioFocusGainType: AndroidAudioFocusGainType.gainTransient,
+            androidWillPauseWhenDucked: true,
           ),
         );
       }
@@ -489,7 +489,7 @@ class IntercomProvider extends ChangeNotifier {
 
   void _flushOutgoing({required String sessionId, bool force = false}) {
     if (_outgoingBuffer.length == 0) return;
-    if (!force && _outgoingBuffer.length < 1400) {
+    if (!force && _outgoingBuffer.length < 1600) {
       return;
     }
     final bytes = _outgoingBuffer.takeBytes();
@@ -708,7 +708,7 @@ class IntercomProvider extends ChangeNotifier {
     _pendingIncomingBitDepth = bitDepth;
     _incomingBuffer.add(bytes);
     _incomingFlushTimer?.cancel();
-    _incomingFlushTimer = Timer(const Duration(milliseconds: 55), () {
+    _incomingFlushTimer = Timer(const Duration(milliseconds: 70), () {
       final frame = _incomingBuffer.takeBytes();
       if (frame.isEmpty) return;
       _incomingQueue.add(
@@ -718,8 +718,8 @@ class IntercomProvider extends ChangeNotifier {
           bitDepth: _pendingIncomingBitDepth,
         ),
       );
-      if (_incomingQueue.length > 24) {
-        while (_incomingQueue.length > 16) {
+      if (_incomingQueue.length > 12) {
+        while (_incomingQueue.length > 8) {
           _incomingQueue.removeFirst();
         }
       }
@@ -733,18 +733,25 @@ class IntercomProvider extends ChangeNotifier {
     await _configureAudioSession();
     while (_incomingQueue.isNotEmpty && !_isMuted) {
       final frame = _incomingQueue.removeFirst();
+      final merged = BytesBuilder(copy: false)..add(frame.pcm);
+      while (_incomingQueue.isNotEmpty && merged.length < 6400) {
+        final next = _incomingQueue.first;
+        if (next.sampleRate != frame.sampleRate ||
+            next.bitDepth != frame.bitDepth) {
+          break;
+        }
+        merged.add(_incomingQueue.removeFirst().pcm);
+      }
       final wav = _pcmToWavMono(
-        frame.pcm,
+        Uint8List.fromList(merged.takeBytes()),
         sampleRate: frame.sampleRate,
         bitDepth: frame.bitDepth,
       );
-      final uri = Uri.dataFromBytes(wav, mimeType: "audio/wav");
       try {
-        await _incomingPlayer.setAudioSource(AudioSource.uri(uri));
-        await _incomingPlayer.setVolume(1.0);
-        await _incomingPlayer.play();
-      } catch (_) {
-        // Continue with next frame on decode/playback failures.
+        await _playIncomingWav(wav);
+      } catch (e) {
+        _lastErrorMessage = "Error de reproduccion intercom: ${_errorLabel(e)}";
+        notifyListeners();
       }
     }
     _drainingIncoming = false;
@@ -775,6 +782,18 @@ class IntercomProvider extends ChangeNotifier {
       ..setUint32(36, 0x64617461, Endian.big) // data
       ..setUint32(40, dataLength, Endian.little);
     return Uint8List.fromList([...header.buffer.asUint8List(), ...pcm]);
+  }
+
+  Future<void> _playIncomingWav(Uint8List wavBytes) async {
+    final slot = _incomingFileCursor % 4;
+    _incomingFileCursor += 1;
+    final wavPath =
+        "${Directory.systemTemp.path}${Platform.pathSeparator}atob_intercom_$slot.wav";
+    final wavFile = File(wavPath);
+    await wavFile.writeAsBytes(wavBytes, flush: true);
+    await _incomingPlayer.setFilePath(wavFile.path);
+    await _incomingPlayer.setVolume(1.0);
+    await _incomingPlayer.play();
   }
 
   String _nextClientSessionId() {
