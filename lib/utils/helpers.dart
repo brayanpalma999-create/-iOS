@@ -8,11 +8,13 @@ String shortClock(DateTime dateTime) {
 String statusLabel(String raw) {
   switch (raw) {
     case "on_way":
-      return "En camino";
+      return "En ruta";
     case "assigned":
       return "Asignado";
     case "accepted":
-      return "En camino";
+      return "En ruta";
+    case "completed":
+      return "Completado";
     case "rejected":
       return "Rechazado";
     default:

@@ -10,8 +10,26 @@ class LocationService {
   Timer? _fallbackPollTimer;
   DateTime? _lastFixAt;
   bool _precisionHintShown = false;
+  Future<bool>? _permissionInFlight;
 
   Future<bool> requestPermission() async {
+    final inFlight = _permissionInFlight;
+    if (inFlight != null) {
+      return inFlight;
+    }
+
+    final future = _requestPermissionInternal();
+    _permissionInFlight = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_permissionInFlight, future)) {
+        _permissionInFlight = null;
+      }
+    }
+  }
+
+  Future<bool> _requestPermissionInternal() async {
     var serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
       await Geolocator.openLocationSettings();

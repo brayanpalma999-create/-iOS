@@ -3,14 +3,18 @@ import "package:flutter/material.dart";
 import "ui/screens/admin/admin_home.dart";
 import "ui/screens/driver/driver_home.dart";
 import "ui/screens/login_screen.dart";
+import "ui/screens/splash_screen.dart";
 
 class AppRoutes {
-  static const login = "/";
+  static const splash = "/";
+  static const login = "/login";
   static const adminHome = "/admin/home";
   static const driverHome = "/driver/home";
 
   static Route<dynamic> onGenerateRoute(RouteSettings settings) {
     switch (settings.name) {
+      case splash:
+        return _fade(const SplashScreen(), settings);
       case login:
         return _fade(const LoginScreen(), settings);
       case adminHome:

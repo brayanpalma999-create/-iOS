@@ -3,10 +3,16 @@ import "package:flutter/material.dart";
 import "../../utils/constants.dart";
 
 class MapMarker extends StatefulWidget {
-  const MapMarker({super.key, required this.label, required this.active});
+  const MapMarker({
+    super.key,
+    required this.label,
+    required this.active,
+    this.carMode = false,
+  });
 
   final String label;
   final bool active;
+  final bool carMode;
 
   @override
   State<MapMarker> createState() => _MapMarkerState();
@@ -65,11 +71,12 @@ class _MapMarkerState extends State<MapMarker>
           ),
           const SizedBox(height: 4),
           Container(
-            width: 28,
-            height: 28,
+            width: widget.carMode ? 34 : 28,
+            height: widget.carMode ? 34 : 28,
             decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: const Color(0xFF121920),
+              shape: widget.carMode ? BoxShape.rectangle : BoxShape.circle,
+              borderRadius: widget.carMode ? BorderRadius.circular(10) : null,
+              color: const Color(0xFF10161C),
               border: Border.all(
                 color: widget.active
                     ? AppConstants.accent
@@ -86,8 +93,10 @@ class _MapMarkerState extends State<MapMarker>
               ],
             ),
             child: Icon(
-              Icons.navigation_rounded,
-              size: 16,
+              widget.carMode
+                  ? Icons.directions_car_filled_rounded
+                  : Icons.navigation_rounded,
+              size: widget.carMode ? 17 : 16,
               color: widget.active ? AppConstants.accent : Colors.white70,
             ),
           ),

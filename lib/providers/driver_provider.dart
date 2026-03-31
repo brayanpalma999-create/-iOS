@@ -1,6 +1,7 @@
 import "dart:async";
 
 import "package:flutter/material.dart";
+import "package:geolocator/geolocator.dart";
 
 import "../models/driver_model.dart";
 import "../models/location_model.dart";
@@ -38,15 +39,29 @@ class DriverProvider extends ChangeNotifier {
   List<LocationModel> pathForDriver(String driverId) =>
       List.unmodifiable(_pathByDriver[driverId] ?? <LocationModel>[]);
 
-  void connectDriver({required String id, required String name}) {
+  Future<void> connectDriver({required String id, required String name}) async {
+    final initialLocation = await _resolveInitialLocation();
+    final profile = _buildDriverProfile(id: id, name: name);
+    final safeInitialLocation = initialLocation ?? _emptyLocation();
+    final initialStatus = initialLocation == null
+        ? "Ubicacion pendiente"
+        : "Disponible (Visible)";
     _self = DriverModel(
       id: id,
+      intercomId: id,
       name: name,
-      location: LocationModel(latitude: 19.4326, longitude: -99.1332),
-      status: "Disponible (Visible)",
+      legalName: profile.legalName,
+      email: profile.email,
+      phoneNumber: profile.phoneNumber,
+      address: profile.address,
+      governmentId: profile.governmentId,
+      location: safeInitialLocation,
+      status: initialStatus,
     );
     _upsertDriver(_self!);
-    _recordPath(_self!.id, _self!.location);
+    if (initialLocation != null) {
+      _recordPath(_self!.id, _self!.location);
+    }
     _sessionRole = "driver";
     _sessionName = _self!.name;
 
@@ -55,6 +70,47 @@ class DriverProvider extends ChangeNotifier {
     _socketService.emit("drivers:request", {});
     _startLocationTracking();
     notifyListeners();
+  }
+
+  Future<LocationModel?> _resolveInitialLocation() async {
+    final permissionOk = await _locationService.requestPermission();
+    if (!permissionOk) return null;
+
+    try {
+      return await _locationService.current().timeout(
+        const Duration(seconds: 6),
+      );
+    } catch (_) {
+      // Fall through to last known location.
+    }
+
+    try {
+      final lastKnown = await Geolocator.getLastKnownPosition();
+      if (lastKnown == null) return null;
+      return LocationModel(
+        latitude: lastKnown.latitude,
+        longitude: lastKnown.longitude,
+        speed: lastKnown.speed,
+        timestamp: lastKnown.timestamp,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  _DriverProfile _buildDriverProfile({
+    required String id,
+    required String name,
+  }) {
+    final shortId = id.length <= 6 ? id : id.substring(id.length - 6);
+    final slug = name.toLowerCase().replaceAll(RegExp(r"[^a-z0-9]+"), "");
+    return _DriverProfile(
+      legalName: name,
+      email: "${slug.isEmpty ? 'driver$shortId' : slug}@atob.app",
+      phoneNumber: "+1 804 555 ${shortId.padLeft(4, "0").substring(2)}",
+      address: "Virginia driver zone",
+      governmentId: "DRV-$shortId",
+    );
   }
 
   void attachAdminSession({required String name}) {
@@ -138,6 +194,8 @@ class DriverProvider extends ChangeNotifier {
           (id == _self!.id || id == (_socketService.socketId ?? ""))) {
         _self = _self!.copyWith(
           id: id,
+          intercomId:
+              item["intercomId"]?.toString() ?? _self!.intercomId ?? _self!.id,
           name: name,
           status: status,
           currentTripId: tripId,
@@ -148,6 +206,8 @@ class DriverProvider extends ChangeNotifier {
       } else if (existing != null) {
         next = existing.copyWith(
           name: name,
+          intercomId:
+              item["intercomId"]?.toString() ?? existing.intercomId ?? id,
           status: status,
           currentTripId: tripId,
           location: location,
@@ -156,7 +216,13 @@ class DriverProvider extends ChangeNotifier {
       } else {
         next = DriverModel(
           id: id,
+          intercomId: item["intercomId"]?.toString() ?? id,
           name: name,
+          legalName: name,
+          email: item["email"]?.toString() ?? "$id@atob.app",
+          phoneNumber: item["phoneNumber"]?.toString() ?? "+1 804 555 0000",
+          address: item["address"]?.toString() ?? "Operational area",
+          governmentId: item["governmentId"]?.toString() ?? "DRV-$id",
           location: location,
           status: status,
           currentTripId: tripId,
@@ -200,8 +266,16 @@ class DriverProvider extends ChangeNotifier {
         ? _drivers[index]
         : DriverModel(
             id: driverId,
+            intercomId: payload["intercomId"]?.toString() ?? driverId,
             name: payload["name"]?.toString() ?? "Driver",
-            location: _fallbackLocation(driverId),
+            legalName: payload["name"]?.toString() ?? "Driver",
+            email: payload["email"]?.toString() ?? "$driverId@atob.app",
+            phoneNumber:
+                payload["phoneNumber"]?.toString() ?? "+1 804 555 0000",
+            address: payload["address"]?.toString() ?? "Operational area",
+            governmentId:
+                payload["governmentId"]?.toString() ?? "DRV-$driverId",
+            location: _emptyLocation(),
             status: "Disponible",
             isOnline: true,
           );
@@ -217,6 +291,7 @@ class DriverProvider extends ChangeNotifier {
         : base.location;
     final next = base.copyWith(
       location: nextLocation,
+      intercomId: payload["intercomId"]?.toString() ?? base.intercomId,
       status: status ?? base.status,
       isOnline: true,
     );
@@ -253,15 +328,56 @@ class DriverProvider extends ChangeNotifier {
     final tripId = _stringValue(map["id"] ?? map["tripId"]);
     final tripStatus = _stringValue(map["status"])?.toLowerCase();
     final nextStatus = switch (tripStatus) {
-      "accepted" => "En camino",
+      "accepted" => "En ruta",
+      "completed" => "Disponible (Visible)",
       "rejected" => "Disponible",
       _ => "Asignado",
     };
-    final nextTripId = tripStatus == "rejected" ? null : tripId;
+    final nextTripId = (tripStatus == "rejected" || tripStatus == "completed")
+        ? null
+        : tripId;
 
     _self = _self?.copyWith(status: nextStatus, currentTripId: nextTripId);
     if (_self != null) {
       _upsertDriver(_self!);
+    }
+    notifyListeners();
+  }
+
+  void startAssignedTrip(String tripId) {
+    _tripProvider.setTripStatus(tripId: tripId, status: "accepted");
+    _self = _self?.copyWith(status: "En ruta", currentTripId: tripId);
+    if (_self != null) {
+      _upsertDriver(_self!);
+      _socketService.emit("driver:location:update", {
+        "driverId": _self!.id,
+        "intercomId": _self!.intercomId,
+        "name": _self!.name,
+        "status": _self!.status,
+        "currentTripId": tripId,
+        ..._self!.location.toJson(),
+      });
+    }
+    notifyListeners();
+  }
+
+  void completeCurrentTrip(String tripId) {
+    _tripProvider.setTripStatus(tripId: tripId, status: "completed");
+    final current = (_self?.status ?? "").toLowerCase();
+    final nextStatus = current.contains("invisible") || current.contains("no ")
+        ? "No disponible (Invisible)"
+        : "Disponible (Visible)";
+    _self = _self?.copyWith(status: nextStatus, currentTripId: null);
+    if (_self != null) {
+      _upsertDriver(_self!);
+      _socketService.emit("driver:location:update", {
+        "driverId": _self!.id,
+        "intercomId": _self!.intercomId,
+        "name": _self!.name,
+        "status": _self!.status,
+        "currentTripId": null,
+        ..._self!.location.toJson(),
+      });
     }
     notifyListeners();
   }
@@ -273,6 +389,7 @@ class DriverProvider extends ChangeNotifier {
       _upsertDriver(_self!);
       _socketService.emit("driver:location:update", {
         "driverId": _self!.id,
+        "intercomId": _self!.intercomId,
         "name": _self!.name,
         "status": _self!.status,
         ...location.toJson(),
@@ -291,21 +408,8 @@ class DriverProvider extends ChangeNotifier {
     _drivers.add(driver);
   }
 
-  LocationModel _fallbackLocation(String seed) {
-    final hash = seed.codeUnits.fold<int>(0, (sum, c) => sum + c);
-    final latOffset = ((hash % 120) - 60) * 0.00003;
-    final lonOffset = (((hash ~/ 2) % 120) - 60) * 0.00003;
-    final base = _self?.location;
-    if (base != null) {
-      return LocationModel(
-        latitude: base.latitude + latOffset,
-        longitude: base.longitude + lonOffset,
-      );
-    }
-    return LocationModel(
-      latitude: 19.4326 + latOffset,
-      longitude: -99.1332 + lonOffset,
-    );
+  LocationModel _emptyLocation() {
+    return LocationModel(latitude: 0, longitude: 0, speed: 0);
   }
 
   void _recordPath(
@@ -334,6 +438,7 @@ class DriverProvider extends ChangeNotifier {
       _upsertDriver(_self!);
       _socketService.emit("driver:location:update", {
         "driverId": _self!.id,
+        "intercomId": _self!.intercomId,
         "name": _self!.name,
         "status": _self!.status,
         ..._self!.location.toJson(),
@@ -348,6 +453,7 @@ class DriverProvider extends ChangeNotifier {
     _upsertDriver(_self!);
     _socketService.emit("driver:location:update", {
       "driverId": _self!.id,
+      "intercomId": _self!.intercomId,
       "name": _self!.name,
       "status": status,
       ..._self!.location.toJson(),
@@ -376,6 +482,7 @@ class DriverProvider extends ChangeNotifier {
   Future<void> disconnect() async {
     await _locationService.stop();
     _socketService.disconnect();
+    _tripProvider.clearAll();
     _lastRegistrationKey = null;
     _sessionRole = null;
     _sessionName = null;
@@ -402,7 +509,7 @@ class DriverProvider extends ChangeNotifier {
     }
     final existing = _drivers.where((d) => d.id == seed).toList();
     if (existing.isNotEmpty) return existing.first.location;
-    return _fallbackLocation(seed);
+    return _emptyLocation();
   }
 
   @override
@@ -440,9 +547,15 @@ class DriverProvider extends ChangeNotifier {
 
   bool _matchesSelfDriverId(String? driverId) {
     if (driverId == null || driverId.isEmpty) return false;
-    final selfId = _self?.id;
-    final socketId = _socketService.socketId;
-    return driverId == selfId || driverId == socketId;
+    final target = driverId.trim();
+    final targetLower = target.toLowerCase();
+    final selfId = _self?.id.trim();
+    final socketId = _socketService.socketId?.trim();
+    final selfLower = selfId?.toLowerCase();
+    final socketLower = socketId?.toLowerCase();
+    return (selfId != null && (target == selfId || targetLower == selfLower)) ||
+        (socketId != null &&
+            (target == socketId || targetLower == socketLower));
   }
 
   String? _stringValue(dynamic value) {
@@ -450,4 +563,20 @@ class DriverProvider extends ChangeNotifier {
     final text = value.toString().trim();
     return text.isEmpty ? null : text;
   }
+}
+
+class _DriverProfile {
+  const _DriverProfile({
+    required this.legalName,
+    required this.email,
+    required this.phoneNumber,
+    required this.address,
+    required this.governmentId,
+  });
+
+  final String legalName;
+  final String email;
+  final String phoneNumber;
+  final String address;
+  final String governmentId;
 }

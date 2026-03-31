@@ -3,6 +3,7 @@ import "package:provider/provider.dart";
 
 import "../../../providers/driver_provider.dart";
 import "../../../providers/intercom_provider.dart";
+import "../../../utils/app_text.dart";
 import "../../widgets/ptt_button.dart";
 
 class AdminIntercom extends StatelessWidget {
@@ -10,6 +11,8 @@ class AdminIntercom extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    String t({required String es, required String en}) =>
+        context.txt(es: es, en: en);
     final intercom = context.watch<IntercomProvider>();
     final fallbackDrivers = context.watch<DriverProvider>().drivers;
     final availableDrivers = intercom.availableDrivers;
@@ -24,8 +27,8 @@ class AdminIntercom extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  "Intercom",
+                Text(
+                  t(es: "Intercom", en: "Intercom"),
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 8),
@@ -33,8 +36,14 @@ class AdminIntercom extends StatelessWidget {
                   color: intercom.channelLightColor,
                   blinking: intercom.shouldBlinkRed,
                   label: intercom.isPublic
-                      ? "Canal 1 publico: todos escuchan y todos pueden hablar"
-                      : "Canal 2 privado: enlace directo entre admin y driver",
+                      ? t(
+                          es: "Canal 1 publico: todos escuchan y todos pueden hablar",
+                          en: "Public channel 1: everyone listens and everyone can talk",
+                        )
+                      : t(
+                          es: "Canal 2 privado: enlace directo entre admin y driver",
+                          en: "Private channel 2: direct link between admin and driver",
+                        ),
                 ),
                 const SizedBox(height: 10),
                 Row(
@@ -49,8 +58,8 @@ class AdminIntercom extends StatelessWidget {
                             : Icons.volume_up_rounded,
                       ),
                       tooltip: intercom.isMuted
-                          ? "Audio silenciado"
-                          : "Silenciar audio",
+                          ? t(es: "Audio silenciado", en: "Audio muted")
+                          : t(es: "Silenciar audio", en: "Mute audio"),
                     ),
                   ],
                 ),
@@ -64,7 +73,9 @@ class AdminIntercom extends StatelessWidget {
                       onSelected: (_) => context
                           .read<IntercomProvider>()
                           .setMode(private: false),
-                      label: const Text("Canal 1 publico"),
+                      label: Text(
+                        t(es: "Canal 1 publico", en: "Public channel 1"),
+                      ),
                     ),
                     if (useRemoteDrivers)
                       ...availableDrivers.map(
@@ -74,7 +85,11 @@ class AdminIntercom extends StatelessWidget {
                           onSelected: (_) => context
                               .read<IntercomProvider>()
                               .setMode(private: true, targetId: d.id),
-                          label: Text("Canal 2: ${d.name} #${d.id}"),
+                          label: Text(
+                            context.isEnglish
+                                ? "Channel 2: ${d.name}"
+                                : "Canal 2: ${d.name}",
+                          ),
                         ),
                       )
                     else
@@ -85,46 +100,21 @@ class AdminIntercom extends StatelessWidget {
                           onSelected: (_) => context
                               .read<IntercomProvider>()
                               .setMode(private: true, targetId: d.id),
-                          label: Text("Canal 2: ${d.name} #${d.id}"),
+                          label: Text(
+                            context.isEnglish
+                                ? "Channel 2: ${d.name}"
+                                : "Canal 2: ${d.name}",
+                          ),
                         ),
                       ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    color: const Color(0xFF121212),
-                    border: Border.all(color: const Color(0x30FFFFFF)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        "Admin ID: ${intercom.selfId ?? '-'}",
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        "Canal activo: ${intercom.isPublic ? '1 publico' : '2 privado'}",
-                        style: const TextStyle(color: Colors.white70),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        intercom.isPrivate && intercom.targetId != null
-                            ? "Driver enlazado: ${intercom.displayNameForTarget(intercom.targetId)}"
-                            : "Driver enlazado: no seleccionado",
-                        style: const TextStyle(color: Colors.white70),
-                      ),
-                    ],
-                  ),
-                ),
                 if (intercom.isPrivate && intercom.targetId != null) ...[
                   const SizedBox(height: 10),
                   Text(
-                    "Privado activo con: ${intercom.displayNameForTarget(intercom.targetId)}",
+                    context.isEnglish
+                        ? "Private link with: ${intercom.displayNameForTarget(intercom.targetId)}"
+                        : "Privado activo con: ${intercom.displayNameForTarget(intercom.targetId)}",
                   ),
                 ],
               ],
@@ -143,7 +133,9 @@ class AdminIntercom extends StatelessWidget {
         const SizedBox(height: 20),
         Text(
           intercom.activeSpeakerLabel == null
-              ? "Hablando ahora: nadie"
+              ? t(es: "Hablando ahora: nadie", en: "Speaking now: nobody")
+              : context.isEnglish
+              ? "Speaking now: ${intercom.activeSpeakerLabel}"
               : "Hablando ahora: ${intercom.activeSpeakerLabel}",
           textAlign: TextAlign.center,
           style: const TextStyle(
@@ -154,24 +146,34 @@ class AdminIntercom extends StatelessWidget {
         const SizedBox(height: 8),
         Text(
           intercom.isTransmitting
-              ? "Transmitiendo: ${intercom.transmitSeconds}s"
-              : "Ultima transmision: ${intercom.lastTransmissionSeconds}s",
+              ? (context.isEnglish
+                    ? "Transmitting: ${intercom.transmitSeconds}s"
+                    : "Transmitiendo: ${intercom.transmitSeconds}s")
+              : (context.isEnglish
+                    ? "Last transmission: ${intercom.lastTransmissionSeconds}s"
+                    : "Ultima transmision: ${intercom.lastTransmissionSeconds}s"),
           textAlign: TextAlign.center,
         ),
         const SizedBox(height: 6),
         Text(
-          intercom.channelBusy ? "Canal ocupado" : "Canal libre",
+          intercom.channelBusy
+              ? t(es: "Canal ocupado", en: "Busy channel")
+              : t(es: "Canal libre", en: "Channel free"),
           textAlign: TextAlign.center,
         ),
         const SizedBox(height: 6),
         Text(
-          intercom.isMuted ? "Silencio: activado" : "Silencio: desactivado",
+          intercom.isMuted
+              ? t(es: "Silencio: activado", en: "Mute: enabled")
+              : t(es: "Silencio: desactivado", en: "Mute: disabled"),
           textAlign: TextAlign.center,
         ),
         if (intercom.lastErrorMessage != null) ...[
           const SizedBox(height: 8),
           Text(
-            "Intercom: ${intercom.lastErrorMessage}",
+            context.isEnglish
+                ? "Intercom: ${intercom.lastErrorMessage}"
+                : "Intercom: ${intercom.lastErrorMessage}",
             textAlign: TextAlign.center,
             style: const TextStyle(color: Colors.orangeAccent),
           ),

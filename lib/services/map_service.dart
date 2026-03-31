@@ -2,6 +2,7 @@ import "dart:convert";
 import "dart:io";
 
 import "package:latlong2/latlong.dart";
+import "package:shared_preferences/shared_preferences.dart";
 
 import "../models/driver_model.dart";
 import "../utils/constants.dart";
@@ -13,6 +14,7 @@ class AddressSuggestion {
     required this.fullAddress,
     this.latitude,
     this.longitude,
+    this.isRecent = false,
   });
 
   final String mainText;
@@ -20,6 +22,7 @@ class AddressSuggestion {
   final String fullAddress;
   final double? latitude;
   final double? longitude;
+  final bool isRecent;
 
   LatLng? get point {
     if (latitude == null || longitude == null) return null;
@@ -42,19 +45,28 @@ class RouteEstimate {
 }
 
 class MapService {
+  static const String _recentPlacesKey = "atob_recent_places_v1";
+
   LatLng centerFromDrivers(List<DriverModel> drivers, {LatLng? fallback}) {
-    if (drivers.isEmpty) {
-      return fallback ?? const LatLng(19.4326, -99.1332);
+    final validDrivers = drivers
+        .where(
+          (driver) =>
+              driver.location.latitude.abs() > 0.001 ||
+              driver.location.longitude.abs() > 0.001,
+        )
+        .toList();
+    if (validDrivers.isEmpty) {
+      return fallback ?? const LatLng(37.0902, -95.7129);
     }
 
     var lat = 0.0;
     var lng = 0.0;
-    for (final driver in drivers) {
+    for (final driver in validDrivers) {
       lat += driver.location.latitude;
       lng += driver.location.longitude;
     }
 
-    return LatLng(lat / drivers.length, lng / drivers.length);
+    return LatLng(lat / validDrivers.length, lng / validDrivers.length);
   }
 
   double dynamicZoom(int driverCount) {
@@ -70,8 +82,21 @@ class MapService {
     LatLng? proximity,
   }) async {
     final value = query.trim();
+    final recent = await _loadRecentSuggestions(
+      value,
+      limit: limit,
+      proximity: proximity,
+    );
     if (value.length < 3) {
-      return <AddressSuggestion>[];
+      return recent;
+    }
+    if (!AppConstants.hasMapboxToken) {
+      final fallback = await _autocompleteWithNominatim(
+        value,
+        limit: limit,
+        proximity: proximity,
+      );
+      return _mergeSuggestions(recent, fallback, limit: limit);
     }
 
     final encoded = Uri.encodeComponent(value);
@@ -91,6 +116,7 @@ class MapService {
     final client = HttpClient();
     try {
       final request = await client.getUrl(url);
+      request.headers.set(HttpHeaders.userAgentHeader, "AtoB/1.0");
       final response = await request.close();
       if (response.statusCode != 200) {
         return <AddressSuggestion>[];
@@ -107,7 +133,7 @@ class MapService {
         return <AddressSuggestion>[];
       }
 
-      return features
+      final suggestions = features
           .whereType<Map>()
           .map((f) => f.cast<String, dynamic>())
           .map((feature) {
@@ -144,11 +170,116 @@ class MapService {
           })
           .where((s) => s.fullAddress.trim().isNotEmpty)
           .toList();
+      return _mergeSuggestions(
+        recent,
+        _filterByProximity(suggestions, proximity),
+        limit: limit,
+      );
     } catch (_) {
-      return <AddressSuggestion>[];
+      return recent;
     } finally {
       client.close(force: true);
     }
+  }
+
+  Future<List<AddressSuggestion>> _autocompleteWithNominatim(
+    String query, {
+    required int limit,
+    LatLng? proximity,
+  }) async {
+    final encoded = Uri.encodeComponent(query);
+    final url = Uri.parse(
+      "https://nominatim.openstreetmap.org/search"
+      "?q=$encoded"
+      "&format=jsonv2"
+      "&addressdetails=1"
+      "&limit=$limit"
+      "&accept-language=es",
+    );
+    final client = HttpClient();
+    try {
+      final request = await client.getUrl(url);
+      request.headers.set(HttpHeaders.userAgentHeader, "AtoB/1.0");
+      final response = await request.close();
+      if (response.statusCode != 200) {
+        return <AddressSuggestion>[];
+      }
+      final body = await response.transform(utf8.decoder).join();
+      final json = jsonDecode(body);
+      if (json is! List) {
+        return <AddressSuggestion>[];
+      }
+
+      final suggestions = <AddressSuggestion>[];
+      for (final item in json.whereType<Map>()) {
+        final map = item.cast<String, dynamic>();
+        final display = map["display_name"]?.toString().trim() ?? "";
+        if (display.isEmpty) continue;
+        final parts = display.split(",");
+        final main = parts.first.trim();
+        final secondary = parts
+            .skip(1)
+            .map((p) => p.trim())
+            .where((p) => p.isNotEmpty)
+            .take(3)
+            .join(", ");
+        final lat = _toDouble(map["lat"]);
+        final lon = _toDouble(map["lon"]);
+        suggestions.add(
+          AddressSuggestion(
+            mainText: main.isEmpty ? display : main,
+            secondaryText: secondary,
+            fullAddress: display,
+            latitude: lat,
+            longitude: lon,
+          ),
+        );
+      }
+
+      return _mergeSuggestions(
+        await _loadRecentSuggestions(query, limit: limit, proximity: proximity),
+        _filterByProximity(suggestions, proximity),
+        limit: limit,
+      );
+    } catch (_) {
+      return _loadRecentSuggestions(query, limit: limit, proximity: proximity);
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<void> rememberAddress(AddressSuggestion suggestion) async {
+    if (suggestion.fullAddress.trim().isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getStringList(_recentPlacesKey) ?? <String>[];
+    final items = <Map<String, dynamic>>[];
+    for (final encoded in raw) {
+      try {
+        final decoded = jsonDecode(encoded);
+        if (decoded is Map<String, dynamic>) {
+          items.add(decoded);
+        } else if (decoded is Map) {
+          items.add(decoded.cast<String, dynamic>());
+        }
+      } catch (_) {
+        // Ignore malformed entries.
+      }
+    }
+    items.removeWhere(
+      (item) =>
+          (item["fullAddress"]?.toString().trim().toLowerCase() ?? "") ==
+          suggestion.fullAddress.trim().toLowerCase(),
+    );
+    items.insert(0, {
+      "mainText": suggestion.mainText,
+      "secondaryText": suggestion.secondaryText,
+      "fullAddress": suggestion.fullAddress,
+      "latitude": suggestion.latitude,
+      "longitude": suggestion.longitude,
+      "savedAt": DateTime.now().toIso8601String(),
+    });
+    final trimmed = items.take(12).map(jsonEncode).toList();
+    await prefs.setStringList(_recentPlacesKey, trimmed);
   }
 
   Future<LatLng?> geocodeAddress(String query, {LatLng? proximity}) async {
@@ -165,6 +296,9 @@ class MapService {
     required LatLng origin,
     required LatLng destination,
   }) async {
+    if (!AppConstants.hasMapboxToken) {
+      return _calculateRouteWithOsrm(origin: origin, destination: destination);
+    }
     final coords =
         "${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}";
     final url = Uri.parse(
@@ -180,6 +314,7 @@ class MapService {
     final client = HttpClient();
     try {
       final request = await client.getUrl(url);
+      request.headers.set(HttpHeaders.userAgentHeader, "AtoB/1.0");
       final response = await request.close();
       if (response.statusCode != 200) {
         return _fallbackEstimate(origin: origin, destination: destination);
@@ -238,6 +373,77 @@ class MapService {
     }
   }
 
+  Future<RouteEstimate?> _calculateRouteWithOsrm({
+    required LatLng origin,
+    required LatLng destination,
+  }) async {
+    final coords =
+        "${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}";
+    final url = Uri.parse(
+      "https://router.project-osrm.org/route/v1/driving/$coords"
+      "?overview=full"
+      "&geometries=geojson"
+      "&steps=false",
+    );
+    final client = HttpClient();
+    try {
+      final request = await client.getUrl(url);
+      request.headers.set(HttpHeaders.userAgentHeader, "AtoB/1.0");
+      final response = await request.close();
+      if (response.statusCode != 200) {
+        return _fallbackEstimate(origin: origin, destination: destination);
+      }
+      final body = await response.transform(utf8.decoder).join();
+      final json = jsonDecode(body);
+      if (json is! Map<String, dynamic>) {
+        return _fallbackEstimate(origin: origin, destination: destination);
+      }
+      final routes = json["routes"];
+      if (routes is! List || routes.isEmpty) {
+        return _fallbackEstimate(origin: origin, destination: destination);
+      }
+      final first = routes.first;
+      if (first is! Map) {
+        return _fallbackEstimate(origin: origin, destination: destination);
+      }
+      final map = first.cast<String, dynamic>();
+      final meters = (map["distance"] as num?)?.toDouble() ?? 0;
+      final seconds = (map["duration"] as num?)?.toDouble() ?? 0;
+      final miles = meters / 1609.344;
+      final fare = fareForMiles(miles);
+
+      final path = <LatLng>[];
+      final geometry = map["geometry"];
+      if (geometry is Map) {
+        final coordinates = geometry["coordinates"];
+        if (coordinates is List) {
+          for (final item in coordinates) {
+            if (item is List && item.length >= 2) {
+              final lon = item[0];
+              final lat = item[1];
+              if (lon is num && lat is num) {
+                path.add(LatLng(lat.toDouble(), lon.toDouble()));
+              }
+            }
+          }
+        }
+      }
+      if (path.isEmpty) {
+        path.addAll([origin, destination]);
+      }
+      return RouteEstimate(
+        distanceMiles: miles,
+        durationMinutes: seconds / 60,
+        fareUsd: fare,
+        path: path,
+      );
+    } catch (_) {
+      return _fallbackEstimate(origin: origin, destination: destination);
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   RouteEstimate _fallbackEstimate({
     required LatLng origin,
     required LatLng destination,
@@ -260,5 +466,99 @@ class MapService {
       return AppConstants.minimumTripFare;
     }
     return miles * AppConstants.farePerMile;
+  }
+
+  double? _toDouble(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is num) return raw.toDouble();
+    return double.tryParse(raw.toString());
+  }
+
+  List<AddressSuggestion> _filterByProximity(
+    List<AddressSuggestion> suggestions,
+    LatLng? proximity,
+  ) {
+    if (suggestions.isEmpty || proximity == null) return suggestions;
+    final distance = const Distance();
+    suggestions.sort((a, b) {
+      final ap = a.point;
+      final bp = b.point;
+      if (ap == null && bp == null) return 0;
+      if (ap == null) return 1;
+      if (bp == null) return -1;
+      final ad = distance.as(LengthUnit.Meter, proximity, ap);
+      final bd = distance.as(LengthUnit.Meter, proximity, bp);
+      return ad.compareTo(bd);
+    });
+
+    final radiusMeters = AppConstants.suggestionRadiusKm * 1000;
+    final near = suggestions.where((item) {
+      final point = item.point;
+      if (point == null) return false;
+      final meters = distance.as(LengthUnit.Meter, proximity, point);
+      return meters <= radiusMeters;
+    }).toList();
+
+    if (near.isNotEmpty) return near;
+    return <AddressSuggestion>[];
+  }
+
+  Future<List<AddressSuggestion>> _loadRecentSuggestions(
+    String query, {
+    required int limit,
+    LatLng? proximity,
+  }) async {
+    final normalized = query.trim().toLowerCase();
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getStringList(_recentPlacesKey) ?? <String>[];
+    final matches = <AddressSuggestion>[];
+    for (final encoded in raw) {
+      try {
+        final decoded = jsonDecode(encoded);
+        if (decoded is! Map) continue;
+        final map = decoded.cast<String, dynamic>();
+        final fullAddress = map["fullAddress"]?.toString().trim() ?? "";
+        final mainText = map["mainText"]?.toString().trim() ?? fullAddress;
+        final secondaryText = map["secondaryText"]?.toString().trim() ?? "";
+        if (fullAddress.isEmpty) continue;
+        if (normalized.isNotEmpty &&
+            !fullAddress.toLowerCase().contains(normalized) &&
+            !mainText.toLowerCase().contains(normalized)) {
+          continue;
+        }
+        matches.add(
+          AddressSuggestion(
+            mainText: mainText,
+            secondaryText: secondaryText.isEmpty
+                ? "Visitado antes"
+                : "Visitado antes - $secondaryText",
+            fullAddress: fullAddress,
+            latitude: _toDouble(map["latitude"]),
+            longitude: _toDouble(map["longitude"]),
+            isRecent: true,
+          ),
+        );
+      } catch (_) {
+        // Ignore malformed entries.
+      }
+    }
+    return _filterByProximity(matches, proximity).take(limit).toList();
+  }
+
+  List<AddressSuggestion> _mergeSuggestions(
+    List<AddressSuggestion> primary,
+    List<AddressSuggestion> secondary, {
+    required int limit,
+  }) {
+    final merged = <AddressSuggestion>[];
+    final seen = <String>{};
+    for (final item in [...primary, ...secondary]) {
+      final key = item.fullAddress.trim().toLowerCase();
+      if (key.isEmpty || seen.contains(key)) continue;
+      seen.add(key);
+      merged.add(item);
+      if (merged.length >= limit) break;
+    }
+    return merged;
   }
 }

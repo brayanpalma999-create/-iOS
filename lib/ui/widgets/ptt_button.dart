@@ -42,9 +42,7 @@ class _PttButtonState extends State<PttButton>
   void _onGlobalPointerEvent(PointerEvent event) {
     final pointer = _trackingPointer;
     if (pointer == null || event.pointer != pointer) return;
-    if (event is PointerUpEvent ||
-        event is PointerRemovedEvent ||
-        event is PointerCancelEvent) {
+    if (event is PointerUpEvent || event is PointerRemovedEvent) {
       _trackingPointer = null;
       _endHold();
     }
@@ -65,11 +63,17 @@ class _PttButtonState extends State<PttButton>
   @override
   void didUpdateWidget(covariant PttButton oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.active) {
-      _controller.repeat(reverse: true);
-    } else {
+    if (!widget.active && _holding && _trackingPointer != null) {
+      // If a parent gesture (scroll, route transition) consumed the pointer,
+      // unblock the button for the next press cycle.
       _trackingPointer = null;
       _holding = false;
+    }
+    if (widget.active) {
+      if (!_controller.isAnimating) {
+        _controller.repeat(reverse: true);
+      }
+    } else {
       _controller.stop();
       _controller.value = 1;
     }
@@ -101,8 +105,8 @@ class _PttButtonState extends State<PttButton>
       },
       onPointerCancel: (event) {
         if (_trackingPointer != event.pointer) return;
-        _trackingPointer = null;
-        _endHold();
+        // Keep pressed state until a real pointer-up/removal arrives.
+        // This avoids accidental release when the scroll gesture arena wins.
       },
       child: ScaleTransition(
         scale: _controller,

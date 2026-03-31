@@ -1,17 +1,20 @@
 import "dart:async";
 
 import "package:flutter/material.dart";
+import "package:flutter_localizations/flutter_localizations.dart";
 import "package:provider/provider.dart";
 
 import "providers/admin_provider.dart";
 import "providers/auth_provider.dart";
+import "providers/chat_provider.dart";
 import "providers/driver_provider.dart";
 import "providers/intercom_provider.dart";
 import "providers/map_ui_provider.dart";
 import "providers/trip_provider.dart";
 import "routes.dart";
-import "services/audio_capture_service.dart";
 import "services/beep_service.dart";
+import "services/livekit_intercom_service.dart";
+import "services/livekit_token_service.dart";
 import "services/location_service.dart";
 import "services/permission_service.dart";
 import "services/socket_service.dart";
@@ -67,7 +70,15 @@ class _AtoBAppState extends State<AtoBApp> with WidgetsBindingObserver {
         Provider<SocketService>(create: (_) => SocketService()),
         Provider<LocationService>(create: (_) => LocationService()),
         Provider<BeepService>(create: (_) => BeepService()),
-        Provider<AudioCaptureService>(create: (_) => AudioCaptureService()),
+        Provider<LiveKitTokenService>(
+          create: (_) => LiveKitTokenService(),
+          dispose: (_, service) => service.dispose(),
+        ),
+        Provider<LiveKitIntercomService>(
+          create: (context) => LiveKitIntercomService(
+            tokenService: context.read<LiveKitTokenService>(),
+          ),
+        ),
         Provider<TripService>(create: (_) => TripService()),
         ChangeNotifierProvider<MapUiProvider>(create: (_) => MapUiProvider()),
         ChangeNotifierProvider<AuthProvider>(create: (_) => AuthProvider()),
@@ -112,6 +123,22 @@ class _AtoBAppState extends State<AtoBApp> with WidgetsBindingObserver {
         ChangeNotifierProxyProvider2<
           SocketService,
           DriverProvider,
+          ChatProvider
+        >(
+          create: (context) => ChatProvider(
+            socketService: context.read<SocketService>(),
+            driverProvider: context.read<DriverProvider>(),
+          ),
+          update: (context, socketService, driverProvider, previous) =>
+              previous ??
+              ChatProvider(
+                socketService: socketService,
+                driverProvider: driverProvider,
+              ),
+        ),
+        ChangeNotifierProxyProvider2<
+          SocketService,
+          DriverProvider,
           AdminProvider
         >(
           create: (context) => AdminProvider(
@@ -126,38 +153,47 @@ class _AtoBAppState extends State<AtoBApp> with WidgetsBindingObserver {
               ),
         ),
         ChangeNotifierProxyProvider3<
-          SocketService,
+          DriverProvider,
           BeepService,
-          AudioCaptureService,
+          LiveKitIntercomService,
           IntercomProvider
         >(
           create: (context) => IntercomProvider(
-            socketService: context.read<SocketService>(),
+            driverProvider: context.read<DriverProvider>(),
             beepService: context.read<BeepService>(),
-            audioCaptureService: context.read<AudioCaptureService>(),
+            liveKitService: context.read<LiveKitIntercomService>(),
           ),
           update:
               (
                 context,
-                socketService,
+                driverProvider,
                 beepService,
-                audioCaptureService,
+                liveKitService,
                 previous,
               ) =>
                   previous ??
                   IntercomProvider(
-                    socketService: socketService,
+                    driverProvider: driverProvider,
                     beepService: beepService,
-                    audioCaptureService: audioCaptureService,
+                    liveKitService: liveKitService,
                   ),
         ),
       ],
-      child: MaterialApp(
-        title: "AtoB",
-        debugShowCheckedModeBanner: false,
-        theme: appTheme,
-        initialRoute: AppRoutes.login,
-        onGenerateRoute: AppRoutes.onGenerateRoute,
+      child: Consumer<AuthProvider>(
+        builder: (context, auth, _) => MaterialApp(
+          title: "AtoB",
+          debugShowCheckedModeBanner: false,
+          theme: appTheme,
+          locale: Locale(auth.languageCode),
+          supportedLocales: const [Locale("es"), Locale("en")],
+          localizationsDelegates: const [
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          initialRoute: AppRoutes.splash,
+          onGenerateRoute: AppRoutes.onGenerateRoute,
+        ),
       ),
     );
   }

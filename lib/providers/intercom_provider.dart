@@ -1,19 +1,12 @@
 import "dart:async";
-import "dart:collection";
-import "dart:convert";
-import "dart:io";
-import "dart:math";
-import "dart:typed_data";
 
-import "package:audio_session/audio_session.dart";
 import "package:flutter/material.dart";
-import "package:just_audio/just_audio.dart";
-import "package:permission_handler/permission_handler.dart";
 import "package:vibration/vibration.dart";
 
-import "../services/audio_capture_service.dart";
+import "driver_provider.dart";
 import "../services/beep_service.dart";
-import "../services/socket_service.dart";
+import "../services/livekit_intercom_service.dart";
+import "../utils/constants.dart";
 
 enum IntercomChannel { public, private }
 
@@ -29,46 +22,27 @@ class IntercomPeer {
   final String role;
 }
 
-class _IncomingFrame {
-  const _IncomingFrame({
-    required this.pcm,
-    required this.sampleRate,
-    required this.bitDepth,
-  });
-
-  final Uint8List pcm;
-  final int sampleRate;
-  final int bitDepth;
-}
-
 class IntercomProvider extends ChangeNotifier {
   IntercomProvider({
-    required SocketService socketService,
+    required DriverProvider driverProvider,
     required BeepService beepService,
-    required AudioCaptureService audioCaptureService,
-  }) : _socketService = socketService,
+    required LiveKitIntercomService liveKitService,
+  }) : _driverProvider = driverProvider,
        _beepService = beepService,
-       _audioCaptureService = audioCaptureService {
-    unawaited(_configureAudioSession());
-    _subscribeSocket();
-    _connectionSubscription = _socketService.connectionState.listen((
-      connected,
-    ) {
-      if (connected) {
-        _registerOnServer();
-      } else {
-        if (_isTransmitting) {
-          unawaited(releasePtt());
-        }
-        _clearIncomingSpeaker(notify: true);
-      }
-    });
+       _liveKitService = liveKitService {
+    _liveKitSubscription = _liveKitService.events.listen(_handleLiveKitEvent);
   }
 
-  final SocketService _socketService;
+  final DriverProvider _driverProvider;
   final BeepService _beepService;
-  final AudioCaptureService _audioCaptureService;
-  final AudioPlayer _incomingPlayer = AudioPlayer();
+  final LiveKitIntercomService _liveKitService;
+
+  final Map<int, IntercomPeer> _peerByUid = <int, IntercomPeer>{};
+
+  StreamSubscription<LiveKitIntercomEvent>? _liveKitSubscription;
+  Timer? _pttSafetyTimer;
+  Timer? _pttElapsedTimer;
+  Timer? _incomingBusyGuardTimer;
 
   bool _isTransmitting = false;
   bool _channelBusy = false;
@@ -83,29 +57,15 @@ class IntercomProvider extends ChangeNotifier {
   String? _activeSpeakerId;
   String? _activeSpeakerRole;
   String? _activeSpeakerName;
-  String? _activeClientSessionId;
+  int? _activeSpeakerUid;
   DateTime? _pttStartedAt;
   DateTime? _lastIncomingVoiceAt;
   int _transmitSeconds = 0;
   int _lastTransmissionSeconds = 0;
   String? _lastErrorMessage;
-
-  final List<IntercomPeer> _availableDrivers = <IntercomPeer>[];
-  final ListQueue<_IncomingFrame> _incomingQueue = ListQueue<_IncomingFrame>();
-  final BytesBuilder _incomingBuffer = BytesBuilder(copy: false);
-  final BytesBuilder _outgoingBuffer = BytesBuilder(copy: false);
-  int _pendingIncomingSampleRate = 16000;
-  int _pendingIncomingBitDepth = 16;
-  StreamSubscription<Uint8List>? _captureSubscription;
-  StreamSubscription<bool>? _connectionSubscription;
-  Timer? _incomingFlushTimer;
-  Timer? _outgoingFlushTimer;
-  Timer? _pttSafetyTimer;
-  Timer? _pttElapsedTimer;
-  Timer? _incomingBusyGuardTimer;
-  bool _drainingIncoming = false;
-  bool _audioSessionReady = false;
-  int _incomingFileCursor = 0;
+  String? _joinedChannelId;
+  int? _localParticipantUid;
+  int? _mutedRemoteSpeakerUid;
 
   bool get isTransmitting => _isTransmitting;
   bool get channelBusy => _channelBusy;
@@ -123,11 +83,24 @@ class IntercomProvider extends ChangeNotifier {
   String? get lastErrorMessage => _lastErrorMessage;
   String? get activeSpeakerId => _activeSpeakerId;
   String? get activeSpeakerRole => _activeSpeakerRole;
-  List<IntercomPeer> get availableDrivers =>
-      List.unmodifiable(_availableDrivers);
   bool get shouldBlinkRed => isPrivate;
   Color get channelLightColor =>
       isPrivate ? Colors.redAccent : Colors.greenAccent;
+
+  List<IntercomPeer> get availableDrivers => _driverProvider.drivers
+      .where(
+        (driver) =>
+            (driver.intercomId ?? driver.id) != _participantId &&
+            driver.isOnline,
+      )
+      .map(
+        (driver) => IntercomPeer(
+          id: driver.intercomId ?? driver.id,
+          name: driver.name,
+          role: "driver",
+        ),
+      )
+      .toList(growable: false);
 
   String? get activeSpeakerLabel {
     final id = _activeSpeakerId;
@@ -137,23 +110,13 @@ class IntercomProvider extends ChangeNotifier {
     return id;
   }
 
-  String? get _senderId {
-    final socketId = _socketService.socketId;
-    if (socketId != null && socketId.isNotEmpty) {
-      return socketId;
-    }
-    if (_selfId != null && _selfId!.isNotEmpty) {
-      return _selfId;
-    }
-    return null;
-  }
-
   String displayNameForTarget(String? id) {
     if (id == null || id.isEmpty) return "-";
-    if (id.toLowerCase() == "admin") return "admin";
-    final found = _availableDrivers.where((d) => d.id == id).toList();
-    if (found.isNotEmpty) {
-      return "${found.first.name} (#${found.first.id})";
+    if (id.toLowerCase() == "admin") return "Admin";
+    for (final driver in _driverProvider.drivers) {
+      if (driver.id == id || driver.intercomId == id) {
+        return "${driver.name} (#${driver.id})";
+      }
     }
     return id;
   }
@@ -163,36 +126,59 @@ class IntercomProvider extends ChangeNotifier {
     required bool isAdmin,
     String? name,
   }) {
-    _selfId = userId;
+    _selfId = isAdmin ? "admin" : userId;
     _selfRole = isAdmin ? "admin" : "driver";
     _selfName = (name ?? "").trim().isEmpty ? _selfName : name!.trim();
-    _registerOnServer();
+    _rememberSelfPeer();
+    unawaited(_syncChannelMembership(force: true));
     notifyListeners();
   }
 
+  String get _effectiveSelfId {
+    final ownId = (_selfId ?? "").trim();
+    if (selfIsAdmin) {
+      return "admin";
+    }
+    return ownId.isEmpty ? "driver" : ownId;
+  }
+
+  String get _effectiveSelfName {
+    final providerName = _driverProvider.self?.name.trim();
+    if (!selfIsAdmin && providerName != null && providerName.isNotEmpty) {
+      return providerName;
+    }
+    return _selfName;
+  }
+
   void setMode({required bool private, String? targetId}) {
-    final wasPrivate = isPrivate;
-    _channel = private ? IntercomChannel.private : IntercomChannel.public;
-    _targetId = private ? targetId : null;
-    if (!wasPrivate && isPrivate) {
+    final nextChannel = private
+        ? IntercomChannel.private
+        : IntercomChannel.public;
+    final nextTargetId = private ? targetId : null;
+    final changed = _channel != nextChannel || _targetId != nextTargetId;
+    if (!changed) return;
+
+    if (_isTransmitting) {
+      unawaited(releasePtt());
+    }
+
+    final enteringPrivate =
+        _channel == IntercomChannel.public &&
+        nextChannel == IntercomChannel.private;
+    _channel = nextChannel;
+    _targetId = nextTargetId;
+    _clearIncomingSpeaker(notify: false);
+    if (enteringPrivate) {
       unawaited(_beepService.playPrivateBeep());
     }
+    unawaited(_syncChannelMembership(force: _joinedChannelId == null));
     notifyListeners();
   }
 
   Future<void> setMuted(bool muted) async {
     if (_isMuted == muted) return;
     _isMuted = muted;
-    if (_isMuted) {
-      _incomingQueue.clear();
-      _incomingBuffer.clear();
-      _incomingFlushTimer?.cancel();
-      try {
-        await _incomingPlayer.stop();
-      } catch (_) {
-        // Keep mute operation resilient.
-      }
-    }
+    await _liveKitService.setRemoteMuted(muted);
     notifyListeners();
   }
 
@@ -204,77 +190,47 @@ class IntercomProvider extends ChangeNotifier {
       return;
     }
 
-    if (_channelBusy) {
-      final senderId = _senderId;
-      final busyFromOther =
-          _activeSpeakerId != null &&
-          _activeSpeakerId != _selfId &&
-          _activeSpeakerId != senderId;
-      final staleBusy =
-          _lastIncomingVoiceAt == null ||
-          DateTime.now().difference(_lastIncomingVoiceAt!).inSeconds >= 2;
-      if (busyFromOther && !staleBusy) {
-        await _beepService.playBusyBeep();
-        return;
-      }
-      // Ask backend to clear stale locks only when the channel appears idle.
-      if (staleBusy) {
-        _socketService.emit("voice:stop", {
-          "reason": "client-stale-busy-reset",
-          "fromId": senderId,
-          "senderId": senderId,
-          "senderRole": _selfRole,
-        });
-      }
-      _clearIncomingSpeaker();
-    }
-
     if (isPrivate && (_targetId == null || _targetId!.isEmpty)) {
       await _beepService.playPttOff();
       return;
     }
-    await _configureAudioSession();
-    final micStatus = await Permission.microphone.status;
-    if (!micStatus.isGranted) {
-      final requested = await Permission.microphone.request();
-      if (!requested.isGranted && !requested.isLimited) {
-        _lastErrorMessage = "Permiso de microfono no concedido";
-        notifyListeners();
-        await _beepService.playPttOff();
-        return;
-      }
+
+    if (_selfId == null || _selfId!.isEmpty) {
+      _lastErrorMessage = "Inicia sesion antes de usar intercom";
+      notifyListeners();
+      await _beepService.playPttOff();
+      return;
+    }
+
+    if (_hasRemoteSpeakerLocked()) {
+      await _beepService.playBusyBeep();
+      return;
     }
 
     _pttTransitioning = true;
     _pendingReleaseDuringTransition = false;
-    final sessionId = _nextClientSessionId();
-    _activeClientSessionId = sessionId;
-    _outgoingBuffer.clear();
-    _outgoingFlushTimer?.cancel();
-    var captureStarted = false;
-
     try {
-      await _audioCaptureService.start();
-      captureStarted = true;
+      await _syncChannelMembership(force: false);
+      final channelId = _resolvedIntercomChannelId();
+      if (channelId == null || _joinedChannelId != channelId) {
+        throw StateError("No se pudo enlazar el canal actual");
+      }
+
+      await _liveKitService.sendSignal(_signalPayload(type: "ptt-start"));
+      await _liveKitService.startPublishing();
 
       _isTransmitting = true;
       _transmitSeconds = 0;
       _lastTransmissionSeconds = 0;
       _pttStartedAt = DateTime.now();
       _lastErrorMessage = null;
+      _setSelfAsActiveSpeaker();
       notifyListeners();
 
       await _beepService.playPttOn();
       if (await Vibration.hasVibrator()) {
         Vibration.vibrate(duration: 35, amplitude: 110);
       }
-      _socketService.emit("voice:start", _startPayload(sessionId));
-
-      _outgoingFlushTimer = Timer.periodic(const Duration(milliseconds: 70), (
-        _,
-      ) {
-        _flushOutgoing(sessionId: sessionId);
-      });
 
       _pttElapsedTimer?.cancel();
       _pttElapsedTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
@@ -284,36 +240,16 @@ class IntercomProvider extends ChangeNotifier {
         notifyListeners();
       });
 
-      _captureSubscription = _audioCaptureService.chunks.listen(
-        (chunk) {
-          _queueOutgoing(chunk);
-        },
-        onError: (error) {
-          _lastErrorMessage = "Error de audio: ${_errorLabel(error)}";
-          notifyListeners();
-          unawaited(releasePtt());
-        },
-      );
-
       _pttSafetyTimer?.cancel();
       _pttSafetyTimer = Timer(const Duration(seconds: 90), () {
         unawaited(releasePtt());
       });
-    } catch (e) {
-      if (captureStarted) {
-        try {
-          await _audioCaptureService.stop();
-        } catch (_) {
-          // Ignore stop errors on failed start flow.
-        }
-      }
+    } catch (error) {
       _isTransmitting = false;
       _transmitSeconds = 0;
       _pttStartedAt = null;
-      _activeClientSessionId = null;
-      final pluginError = _audioCaptureService.lastStartError;
-      _lastErrorMessage =
-          "No se pudo iniciar captura de audio: ${_errorLabel(pluginError ?? e)}";
+      _clearIncomingSpeaker(notify: false);
+      _lastErrorMessage = "No se pudo iniciar intercom: ${_errorLabel(error)}";
       notifyListeners();
       await _beepService.playPttOff();
     } finally {
@@ -336,16 +272,10 @@ class IntercomProvider extends ChangeNotifier {
     _pendingReleaseDuringTransition = false;
     _pttSafetyTimer?.cancel();
     _pttSafetyTimer = null;
-    _outgoingFlushTimer?.cancel();
-    _outgoingFlushTimer = null;
+    _pttElapsedTimer?.cancel();
+    _pttElapsedTimer = null;
 
-    final sessionId = _activeClientSessionId;
     try {
-      await _captureSubscription?.cancel();
-      _captureSubscription = null;
-      _pttElapsedTimer?.cancel();
-      _pttElapsedTimer = null;
-
       final start = _pttStartedAt;
       if (start != null) {
         _lastTransmissionSeconds = DateTime.now().difference(start).inSeconds;
@@ -355,451 +285,373 @@ class IntercomProvider extends ChangeNotifier {
       _pttStartedAt = null;
       _transmitSeconds = 0;
 
-      try {
-        await _audioCaptureService.stop();
-      } catch (_) {
-        // Ensure stop event is still emitted.
-      }
-
-      if (sessionId != null) {
-        _flushOutgoing(sessionId: sessionId, force: true);
-      }
-      _socketService.emit("voice:stop", _stopPayload(sessionId));
-      _socketService.emit("voice:end", _stopPayload(sessionId));
+      await _liveKitService.stopPublishing();
+      await _liveKitService.sendSignal(_signalPayload(type: "ptt-stop"));
       await _beepService.playPttOff();
     } finally {
       _isTransmitting = false;
-      _activeClientSessionId = null;
-      _outgoingBuffer.clear();
+      if (_hasFreshIncomingVoice()) {
+        _channelBusy = true;
+      } else {
+        _clearIncomingSpeaker(notify: false);
+      }
       notifyListeners();
       _pttTransitioning = false;
     }
   }
 
-  void _registerOnServer() {
-    final id = _senderId;
-    if (id == null || id.isEmpty) return;
-    _socketService.emit("register", {
-      "role": selfIsAdmin ? "admin" : "driver",
-      "name": _selfName,
-      "id": id,
-    });
-    _socketService.emit("drivers:request", {});
-  }
+  Future<void> _syncChannelMembership({bool force = false}) async {
+    if (_selfId == null || _selfId!.trim().isEmpty) return;
 
-  Map<String, dynamic> _startPayload(String sessionId) {
-    final private = isPrivate;
-    final senderId = _senderId;
-    return {
-      "channel": private ? "private" : "global",
-      "channelNumber": private ? 2 : 1,
-      "private": private,
-      "toDriverId": private ? _targetId : null,
-      "targetId": private ? _targetId : null,
-      "fromId": senderId,
-      "fromName": _selfName,
-      "senderId": senderId,
-      "senderRole": _selfRole,
-      "senderName": _selfName,
-      "sampleRate": _audioCaptureService.sampleRate,
-      "bitDepth": _audioCaptureService.bitDepth,
-      "encoding": "pcm_s16le",
-      "clientSessionId": sessionId,
-    };
-  }
+    final channelId = _resolvedIntercomChannelId();
+    if (channelId == null || channelId.isEmpty) return;
 
-  Map<String, dynamic> _chunkPayload(Uint8List chunk, String sessionId) {
-    final private = isPrivate;
-    final senderId = _senderId;
-    final encoded = base64Encode(chunk);
-    return {
-      "payload": encoded,
-      "chunk": encoded,
-      "payloadEncoding": "base64",
-      "channel": private ? "private" : "global",
-      "channelNumber": private ? 2 : 1,
-      "private": private,
-      "toDriverId": private ? _targetId : null,
-      "targetId": private ? _targetId : null,
-      "fromId": senderId,
-      "fromName": _selfName,
-      "senderId": senderId,
-      "senderRole": _selfRole,
-      "senderName": _selfName,
-      "sampleRate": _audioCaptureService.sampleRate,
-      "bitDepth": _audioCaptureService.bitDepth,
-      "encoding": "pcm_s16le",
-      "clientSessionId": sessionId,
-    };
-  }
-
-  Map<String, dynamic> _stopPayload(String? sessionId) {
-    final private = isPrivate;
-    final senderId = _senderId;
-    return {
-      "channel": private ? "private" : "global",
-      "channelNumber": private ? 2 : 1,
-      "private": private,
-      "toDriverId": private ? _targetId : null,
-      "targetId": private ? _targetId : null,
-      "fromId": senderId,
-      "fromName": _selfName,
-      "senderId": senderId,
-      "senderRole": _selfRole,
-      "senderName": _selfName,
-      "sampleRate": _audioCaptureService.sampleRate,
-      "bitDepth": _audioCaptureService.bitDepth,
-      "encoding": "pcm_s16le",
-      "clientSessionId": sessionId,
-    };
-  }
-
-  Future<void> _configureAudioSession() async {
-    try {
-      final session = await AudioSession.instance;
-      if (!_audioSessionReady) {
-        await session.configure(
-          AudioSessionConfiguration(
-            avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
-            avAudioSessionCategoryOptions:
-                AVAudioSessionCategoryOptions.defaultToSpeaker |
-                AVAudioSessionCategoryOptions.allowBluetooth,
-            avAudioSessionMode: AVAudioSessionMode.voiceChat,
-            androidAudioAttributes: AndroidAudioAttributes(
-              contentType: AndroidAudioContentType.speech,
-              usage: AndroidAudioUsage.voiceCommunication,
-            ),
-            androidAudioFocusGainType: AndroidAudioFocusGainType.gainTransient,
-            androidWillPauseWhenDucked: true,
-          ),
-        );
-      }
-      await session.setActive(true);
-      await _incomingPlayer.setVolume(1.0);
-      _audioSessionReady = true;
-    } catch (_) {
-      // Keep app functional even if session tuning is unsupported on a device.
-    }
-  }
-
-  void _queueOutgoing(Uint8List chunk) {
-    if (chunk.isEmpty) return;
-    _outgoingBuffer.add(chunk);
-  }
-
-  void _flushOutgoing({required String sessionId, bool force = false}) {
-    if (_outgoingBuffer.length == 0) return;
-    if (!force && _outgoingBuffer.length < 1600) {
+    final localUid = _resolveLocalParticipantUid();
+    if (!force && _joinedChannelId == channelId && _liveKitService.isJoined) {
+      await _liveKitService.setRemoteMuted(_isMuted);
       return;
     }
-    final bytes = _outgoingBuffer.takeBytes();
-    if (bytes.isEmpty) return;
-    _socketService.emit(
-      "voice:chunk",
-      _chunkPayload(Uint8List.fromList(bytes), sessionId),
-    );
+
+    try {
+      await _liveKitService.ensureJoined(
+        channelId: channelId,
+        participantIdentity: _participantId,
+        participantName: _effectiveSelfName,
+        participantRole: _selfRole,
+      );
+      _joinedChannelId = channelId;
+      _localParticipantUid = _liveKitService.localUid ?? localUid;
+      _rememberSelfPeer();
+      await _liveKitService.setRemoteMuted(_isMuted);
+      await _liveKitService.sendSignal(_signalPayload(type: "presence"));
+      _lastErrorMessage = null;
+      notifyListeners();
+    } catch (error) {
+      _lastErrorMessage = "LiveKit no pudo conectar: ${_errorLabel(error)}";
+      notifyListeners();
+    }
   }
 
-  void _subscribeSocket() {
-    _socketService.on("drivers:list", (payload) {
-      if (payload is! List) return;
-      final parsed = <IntercomPeer>[];
-      for (final item in payload) {
-        if (item is! Map) continue;
-        final id = _stringOrNull(item["id"]);
-        if (id == null || id == _selfId) continue;
-        final name = _stringOrNull(item["name"]) ?? "Driver";
-        parsed.add(IntercomPeer(id: id, name: name, role: "driver"));
-      }
-      _availableDrivers
-        ..clear()
-        ..addAll(parsed);
-      notifyListeners();
-    });
-
-    _socketService.on("voice:start", (payload) {
-      final data = _asMap(payload);
-      if (data == null || !_canHandleIncoming(data)) return;
-      _markIncomingSpeaker(data);
-      _touchIncomingVoice();
-      if (_isPrivateSignal(data)) {
-        unawaited(_beepService.playPrivateBeep());
-      }
-      notifyListeners();
-    });
-
-    void onVoiceStop(dynamic payload) {
-      final data = _asMap(payload);
-      if (data != null && !_canHandleIncoming(data)) return;
-      _clearIncomingSpeaker(notify: true);
-    }
-
-    _socketService.on("voice:end", onVoiceStop);
-    _socketService.on("voice:stop", onVoiceStop);
-
-    _socketService.on("voice:chunk", (payload) {
-      final data = _asMap(payload);
-      if (data != null) {
-        if (!_canHandleIncoming(data)) return;
-        final bytes = _extractBytes(
-          data["payload"] ?? data["chunk"] ?? data["data"],
-        );
-        if (bytes == null || bytes.isEmpty) return;
-        final sampleRate = _resolveSampleRate(data["sampleRate"]);
-        final bitDepth = _resolveBitDepth(data["bitDepth"]);
-        _markIncomingSpeaker(data);
-        _touchIncomingVoice();
-        _queueIncoming(bytes, sampleRate: sampleRate, bitDepth: bitDepth);
+  void _handleLiveKitEvent(LiveKitIntercomEvent event) {
+    switch (event.type) {
+      case LiveKitIntercomEventType.joined:
+        _joinedChannelId = event.channelId;
+        _localParticipantUid = event.uid;
+        _rememberSelfPeer();
+        unawaited(_liveKitService.setRemoteMuted(_isMuted));
+        unawaited(_liveKitService.sendSignal(_signalPayload(type: "presence")));
+        _lastErrorMessage = null;
         notifyListeners();
         return;
-      }
-
-      final bytes = _extractBytes(payload);
-      if (bytes == null || bytes.isEmpty) return;
-      _touchIncomingVoice();
-      _queueIncoming(bytes, sampleRate: 16000, bitDepth: 16);
-      notifyListeners();
-    });
+      case LiveKitIntercomEventType.left:
+        _joinedChannelId = null;
+        _localParticipantUid = null;
+        _mutedRemoteSpeakerUid = null;
+        if (!_isTransmitting) {
+          _clearIncomingSpeaker(notify: true);
+        }
+        return;
+      case LiveKitIntercomEventType.peerJoined:
+        return;
+      case LiveKitIntercomEventType.peerLeft:
+        final uid = event.uid;
+        if (uid == null) return;
+        if (_activeSpeakerUid == uid && !_isTransmitting) {
+          _clearIncomingSpeaker(notify: true);
+        }
+        return;
+      case LiveKitIntercomEventType.audioLevel:
+        final uid = event.uid;
+        final volume = event.payload?["volume"] as int?;
+        if (uid == null || volume == null) return;
+        _handleAudioLevel(uid: uid, volume: volume);
+        return;
+      case LiveKitIntercomEventType.signal:
+        final uid = event.uid;
+        final payload = event.payload;
+        if (uid == null || payload == null) return;
+        _handleSignal(uid: uid, payload: payload);
+        return;
+      case LiveKitIntercomEventType.error:
+        _lastErrorMessage = event.message;
+        notifyListeners();
+        return;
+      case LiveKitIntercomEventType.connection:
+        if (event.connected == false && !_isTransmitting) {
+          _clearIncomingSpeaker(notify: true);
+        }
+        if ((event.message ?? "").trim().isNotEmpty &&
+            event.connected == false) {
+          _lastErrorMessage = event.message;
+          notifyListeners();
+        }
+        return;
+    }
   }
 
-  void _markIncomingSpeaker(Map<dynamic, dynamic> data) {
-    _activeSpeakerId = _stringOrNull(
-      data["senderId"] ?? data["fromId"] ?? data["id"],
+  void _handleAudioLevel({required int uid, required int volume}) {
+    final localUid = _localParticipantUid;
+    if (localUid != null && uid == localUid) {
+      if (_isTransmitting) {
+        _channelBusy = true;
+        notifyListeners();
+      }
+      return;
+    }
+    if (volume < 8) return;
+    _markRemoteSpeaker(uid: uid);
+    _touchIncomingVoice();
+    notifyListeners();
+  }
+
+  void _handleSignal({
+    required int uid,
+    required Map<String, dynamic> payload,
+  }) {
+    final messageChannel = _stringOrNull(payload["channelId"]);
+    if (messageChannel != null &&
+        _joinedChannelId != null &&
+        messageChannel != _joinedChannelId) {
+      return;
+    }
+
+    _rememberPeer(
+      uid: uid,
+      id: _stringOrNull(payload["speakerId"]),
+      name: _stringOrNull(payload["speakerName"]),
+      role: _stringOrNull(payload["speakerRole"]),
     );
-    _activeSpeakerRole = _stringOrNull(
-      data["senderRole"] ?? data["fromRole"] ?? data["role"],
-    );
-    _activeSpeakerName = _stringOrNull(
-      data["senderName"] ?? data["fromName"] ?? data["name"],
-    );
+
+    final type = _stringOrNull(payload["type"]);
+    switch (type) {
+      case "presence":
+        unawaited(
+          _liveKitService.sendSignal(_signalPayload(type: "presence-ack")),
+        );
+        return;
+      case "presence-ack":
+        return;
+      case "ptt-start":
+        unawaited(_applySpeakerRouting(uid: uid, payload: payload));
+        _markRemoteSpeaker(
+          uid: uid,
+          id: _stringOrNull(payload["speakerId"]),
+          name: _stringOrNull(payload["speakerName"]),
+          role: _stringOrNull(payload["speakerRole"]),
+        );
+        _touchIncomingVoice();
+        if (payload["channelNumber"] == 2 || payload["private"] == true) {
+          unawaited(_beepService.playPrivateBeep());
+        }
+        notifyListeners();
+        return;
+      case "ptt-stop":
+        unawaited(_liveKitService.clearRemoteUserMutes());
+        _mutedRemoteSpeakerUid = null;
+        if (_activeSpeakerUid == uid && !_isTransmitting) {
+          _clearIncomingSpeaker(notify: true);
+        }
+        return;
+    }
+  }
+
+  Future<void> _applySpeakerRouting({
+    required int uid,
+    required Map<String, dynamic> payload,
+  }) async {
+    final shouldHear = _shouldHearPayload(payload);
+    if (shouldHear) {
+      if (_mutedRemoteSpeakerUid == uid) {
+        await _liveKitService.muteRemoteUser(uid, false);
+        _mutedRemoteSpeakerUid = null;
+      }
+      return;
+    }
+
+    await _liveKitService.muteRemoteUser(uid, true);
+    _mutedRemoteSpeakerUid = uid;
+  }
+
+  bool _shouldHearPayload(Map<String, dynamic> payload) {
+    if (_isMuted) return false;
+    final privateFlag =
+        payload["private"] == true ||
+        payload["channelNumber"] == 2 ||
+        _stringOrNull(payload["channel"]) == "private";
+    if (!privateFlag) return true;
+
+    final target = _stringOrNull(payload["targetId"])?.toLowerCase();
+    final self = _participantId.toLowerCase();
+    if (selfIsAdmin) {
+      return target == "admin";
+    }
+    return target == self;
+  }
+
+  void _markRemoteSpeaker({
+    required int uid,
+    String? id,
+    String? name,
+    String? role,
+  }) {
+    final peer = _resolvePeerForUid(uid);
+    _activeSpeakerUid = uid;
+    _activeSpeakerId = id ?? peer?.id ?? "UID $uid";
+    _activeSpeakerName = name ?? peer?.name;
+    _activeSpeakerRole = role ?? peer?.role;
     _channelBusy = true;
   }
 
   void _touchIncomingVoice() {
     _lastIncomingVoiceAt = DateTime.now();
-    _incomingBusyGuardTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
-      final last = _lastIncomingVoiceAt;
-      if (last == null) return;
-      final idleFor = DateTime.now().difference(last);
-      if (idleFor < const Duration(seconds: 2)) return;
-      _clearIncomingSpeaker(notify: true);
-    });
+    _incomingBusyGuardTimer ??= Timer.periodic(
+      const Duration(milliseconds: 800),
+      (_) {
+        if (_isTransmitting) return;
+        if (_hasFreshIncomingVoice()) return;
+        _clearIncomingSpeaker(notify: true);
+      },
+    );
+  }
+
+  bool _hasFreshIncomingVoice() {
+    final last = _lastIncomingVoiceAt;
+    if (last == null) return false;
+    return DateTime.now().difference(last) < const Duration(milliseconds: 1400);
+  }
+
+  bool _hasRemoteSpeakerLocked() {
+    if (!_channelBusy) return false;
+    if (_activeSpeakerUid == null) return false;
+    if (_localParticipantUid != null &&
+        _activeSpeakerUid == _localParticipantUid) {
+      return false;
+    }
+    return _hasFreshIncomingVoice();
+  }
+
+  void _setSelfAsActiveSpeaker() {
+    _activeSpeakerUid = _localParticipantUid ?? _resolveLocalParticipantUid();
+    _activeSpeakerId = _participantId;
+    _activeSpeakerName = _selfName;
+    _activeSpeakerRole = _selfRole;
+    _channelBusy = true;
   }
 
   void _clearIncomingSpeaker({bool notify = false}) {
     _channelBusy = false;
+    _activeSpeakerUid = null;
     _activeSpeakerId = null;
     _activeSpeakerRole = null;
     _activeSpeakerName = null;
+    _mutedRemoteSpeakerUid = null;
     _lastIncomingVoiceAt = null;
     _incomingBusyGuardTimer?.cancel();
     _incomingBusyGuardTimer = null;
+    unawaited(_liveKitService.clearRemoteUserMutes());
     if (notify) notifyListeners();
   }
 
-  Map<dynamic, dynamic>? _asMap(dynamic payload) {
-    if (payload is Map) return payload;
+  Map<String, dynamic> _signalPayload({required String type}) {
+    final privateChannel = isPrivate;
+    return {
+      "type": type,
+      "channelId": _resolvedIntercomChannelId(),
+      "channel": privateChannel ? "private" : "public",
+      "channelNumber": privateChannel ? 2 : 1,
+      "private": privateChannel,
+      "targetId": privateChannel ? _resolvedPrivateTargetId() : null,
+      "speakerId": _participantId,
+      "speakerName": _effectiveSelfName,
+      "speakerRole": _selfRole,
+      "timestamp": DateTime.now().toIso8601String(),
+    };
+  }
+
+  String? _resolvedIntercomChannelId() {
+    return AppConstants.liveKitRoomName;
+  }
+
+  String? _resolvedPrivateTargetId() {
+    if (isPublic) return null;
+    if (selfIsAdmin) return _targetId;
+    return "admin";
+  }
+
+  String get _participantId {
+    return _effectiveSelfId;
+  }
+
+  int _resolveLocalParticipantUid() {
+    if (selfIsAdmin) return 900000001;
+    return _driverParticipantUid(_effectiveSelfId);
+  }
+
+  int _driverParticipantUid(String seed) {
+    var hash = 0x811C9DC5;
+    for (final code in "driver:$seed".codeUnits) {
+      hash ^= code;
+      hash = (hash * 0x01000193) & 0x7fffffff;
+    }
+    return 100000 + (hash % 800000000);
+  }
+
+  IntercomPeer? _resolvePeerForUid(int uid) {
+    final remembered = _peerByUid[uid];
+    if (remembered != null) return remembered;
+
+    if (_localParticipantUid != null && uid == _localParticipantUid) {
+      return IntercomPeer(
+        id: _participantId,
+        name: _effectiveSelfName,
+        role: _selfRole,
+      );
+    }
+    if (uid == 900000001) {
+      return const IntercomPeer(id: "admin", name: "Admin", role: "admin");
+    }
+    for (final driver in _driverProvider.drivers) {
+      final intercomId = driver.intercomId ?? driver.id;
+      if (_driverParticipantUid(intercomId) == uid) {
+        final peer = IntercomPeer(
+          id: intercomId,
+          name: driver.name,
+          role: "driver",
+        );
+        _peerByUid[uid] = peer;
+        return peer;
+      }
+    }
     return null;
   }
 
-  bool _canHandleIncoming(Map<dynamic, dynamic> data) {
-    if (_isTransmitting) {
-      return false;
-    }
-
-    final sessionId = _stringOrNull(data["clientSessionId"]);
-    if (sessionId != null &&
-        _activeClientSessionId != null &&
-        sessionId == _activeClientSessionId) {
-      return false;
-    }
-
-    final senderId = _stringOrNull(data["senderId"] ?? data["fromId"]);
-    final currentSenderId = _senderId;
-    final socketId = _socketService.socketId;
-    if (senderId != null &&
-        (senderId == _selfId ||
-            senderId == currentSenderId ||
-            (socketId != null && senderId == socketId))) {
-      return false;
-    }
-
-    if (!_isPrivateSignal(data)) {
-      return true;
-    }
-
-    final targetId = _stringOrNull(
-      data["targetId"] ?? data["toId"] ?? data["toDriverId"],
+  void _rememberSelfPeer() {
+    final localUid = _localParticipantUid ?? _resolveLocalParticipantUid();
+    _peerByUid[localUid] = IntercomPeer(
+      id: _participantId,
+      name: _effectiveSelfName,
+      role: _selfRole,
     );
-    if (targetId == null || targetId.isEmpty) {
-      return false;
-    }
-    if (_selfId != null && targetId == _selfId) return true;
-    if (currentSenderId != null && targetId == currentSenderId) return true;
-    if (socketId != null && targetId == socketId) return true;
-    if (targetId.toLowerCase() == "admin" && selfIsAdmin) return true;
-    if (targetId.toLowerCase() == "driver" && !selfIsAdmin) return true;
-    return false;
   }
 
-  bool _isPrivateSignal(Map<dynamic, dynamic> data) {
-    final explicitPrivate = data["private"] == true;
-    final channel = data["channel"]?.toString().toLowerCase();
-    final numericChannel = data["channelNumber"] ?? data["channel"];
-    final number = numericChannel is num ? numericChannel.toInt() : null;
-    if (explicitPrivate) return true;
-    if (channel == "private") return true;
-    if (number == 2) return true;
-    return false;
+  void _rememberPeer({
+    required int uid,
+    String? id,
+    String? name,
+    String? role,
+  }) {
+    final current = _peerByUid[uid];
+    final nextId = id ?? current?.id ?? "UID $uid";
+    final nextName = name ?? current?.name ?? nextId;
+    final nextRole = role ?? current?.role ?? "driver";
+    _peerByUid[uid] = IntercomPeer(id: nextId, name: nextName, role: nextRole);
   }
 
   String? _stringOrNull(dynamic value) {
     if (value == null) return null;
-    final str = value.toString().trim();
-    if (str.isEmpty) return null;
-    return str;
-  }
-
-  Uint8List? _extractBytes(dynamic raw) {
-    if (raw == null) return null;
-    if (raw is Uint8List) return raw;
-    if (raw is List<int>) return Uint8List.fromList(raw);
-    if (raw is List) {
-      final ints = <int>[];
-      for (final v in raw) {
-        if (v is num) ints.add(v.toInt().clamp(0, 255).toInt());
-      }
-      return ints.isEmpty ? null : Uint8List.fromList(ints);
-    }
-    if (raw is String) {
-      try {
-        return base64Decode(raw);
-      } catch (_) {
-        return null;
-      }
-    }
-    return null;
-  }
-
-  int _resolveSampleRate(dynamic raw) {
-    final parsed = raw is num
-        ? raw.toInt()
-        : int.tryParse(raw?.toString() ?? "");
-    if (parsed == null) return 16000;
-    return parsed.clamp(8000, 48000).toInt();
-  }
-
-  int _resolveBitDepth(dynamic raw) {
-    final parsed = raw is num
-        ? raw.toInt()
-        : int.tryParse(raw?.toString() ?? "");
-    if (parsed == 8) return 8;
-    if (parsed == 16) return 16;
-    return 16;
-  }
-
-  void _queueIncoming(
-    Uint8List bytes, {
-    required int sampleRate,
-    required int bitDepth,
-  }) {
-    if (_isMuted) return;
-    _pendingIncomingSampleRate = sampleRate;
-    _pendingIncomingBitDepth = bitDepth;
-    _incomingBuffer.add(bytes);
-    _incomingFlushTimer?.cancel();
-    _incomingFlushTimer = Timer(const Duration(milliseconds: 70), () {
-      final frame = _incomingBuffer.takeBytes();
-      if (frame.isEmpty) return;
-      _incomingQueue.add(
-        _IncomingFrame(
-          pcm: Uint8List.fromList(frame),
-          sampleRate: _pendingIncomingSampleRate,
-          bitDepth: _pendingIncomingBitDepth,
-        ),
-      );
-      if (_incomingQueue.length > 12) {
-        while (_incomingQueue.length > 8) {
-          _incomingQueue.removeFirst();
-        }
-      }
-      unawaited(_drainIncomingQueue());
-    });
-  }
-
-  Future<void> _drainIncomingQueue() async {
-    if (_drainingIncoming || _isMuted) return;
-    _drainingIncoming = true;
-    await _configureAudioSession();
-    while (_incomingQueue.isNotEmpty && !_isMuted) {
-      final frame = _incomingQueue.removeFirst();
-      final merged = BytesBuilder(copy: false)..add(frame.pcm);
-      while (_incomingQueue.isNotEmpty && merged.length < 6400) {
-        final next = _incomingQueue.first;
-        if (next.sampleRate != frame.sampleRate ||
-            next.bitDepth != frame.bitDepth) {
-          break;
-        }
-        merged.add(_incomingQueue.removeFirst().pcm);
-      }
-      final wav = _pcmToWavMono(
-        Uint8List.fromList(merged.takeBytes()),
-        sampleRate: frame.sampleRate,
-        bitDepth: frame.bitDepth,
-      );
-      try {
-        await _playIncomingWav(wav);
-      } catch (e) {
-        _lastErrorMessage = "Error de reproduccion intercom: ${_errorLabel(e)}";
-        notifyListeners();
-      }
-    }
-    _drainingIncoming = false;
-  }
-
-  Uint8List _pcmToWavMono(
-    Uint8List pcm, {
-    required int sampleRate,
-    required int bitDepth,
-  }) {
-    final dataLength = pcm.length;
-    final fileSize = 36 + dataLength;
-    final bytesPerSample = (bitDepth / 8).toInt();
-    final blockAlign = bytesPerSample;
-    final byteRate = sampleRate * blockAlign;
-    final header = ByteData(44)
-      ..setUint32(0, 0x52494646, Endian.big) // RIFF
-      ..setUint32(4, fileSize, Endian.little)
-      ..setUint32(8, 0x57415645, Endian.big) // WAVE
-      ..setUint32(12, 0x666d7420, Endian.big) // fmt
-      ..setUint32(16, 16, Endian.little)
-      ..setUint16(20, 1, Endian.little) // PCM
-      ..setUint16(22, 1, Endian.little) // mono
-      ..setUint32(24, sampleRate, Endian.little)
-      ..setUint32(28, byteRate, Endian.little)
-      ..setUint16(32, blockAlign, Endian.little)
-      ..setUint16(34, bitDepth, Endian.little)
-      ..setUint32(36, 0x64617461, Endian.big) // data
-      ..setUint32(40, dataLength, Endian.little);
-    return Uint8List.fromList([...header.buffer.asUint8List(), ...pcm]);
-  }
-
-  Future<void> _playIncomingWav(Uint8List wavBytes) async {
-    final slot = _incomingFileCursor % 4;
-    _incomingFileCursor += 1;
-    final wavPath =
-        "${Directory.systemTemp.path}${Platform.pathSeparator}atob_intercom_$slot.wav";
-    final wavFile = File(wavPath);
-    await wavFile.writeAsBytes(wavBytes, flush: true);
-    await _incomingPlayer.setFilePath(wavFile.path);
-    await _incomingPlayer.setVolume(1.0);
-    await _incomingPlayer.play();
-  }
-
-  String _nextClientSessionId() {
-    final now = DateTime.now().microsecondsSinceEpoch;
-    final rnd = Random().nextInt(1 << 20);
-    return "$now-$rnd";
+    final text = value.toString().trim();
+    if (text.isEmpty) return null;
+    return text;
   }
 
   String _errorLabel(Object? error) {
@@ -812,18 +664,10 @@ class IntercomProvider extends ChangeNotifier {
     _pttSafetyTimer?.cancel();
     _pttElapsedTimer?.cancel();
     _incomingBusyGuardTimer?.cancel();
-    _incomingFlushTimer?.cancel();
-    _outgoingFlushTimer?.cancel();
-    await _captureSubscription?.cancel();
-    _captureSubscription = null;
-    _connectionSubscription?.cancel();
-    _connectionSubscription = null;
+    await _liveKitSubscription?.cancel();
+    _liveKitSubscription = null;
     await releasePtt();
-    _incomingBuffer.clear();
-    _outgoingBuffer.clear();
-    _incomingQueue.clear();
-    await _incomingPlayer.dispose();
-    _audioCaptureService.dispose();
+    await _liveKitService.dispose();
     await _beepService.dispose();
   }
 

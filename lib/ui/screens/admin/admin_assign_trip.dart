@@ -9,6 +9,7 @@ import "../../../models/location_model.dart";
 import "../../../providers/driver_provider.dart";
 import "../../../providers/trip_provider.dart";
 import "../../../services/map_service.dart";
+import "../../../utils/app_text.dart";
 import "../../../utils/helpers.dart";
 import "../../widgets/custom_button.dart";
 import "../../widgets/custom_input.dart";
@@ -48,12 +49,19 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
   }
 
   Future<void> _assign() async {
+    String t({required String es, required String en}) =>
+        context.txt(es: es, en: en);
     if (_selectedDriverId == null ||
         _originCtrl.text.trim().isEmpty ||
         _destCtrl.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Selecciona driver, origen y destino antes de asignar"),
+        SnackBar(
+          content: Text(
+            t(
+              es: "Selecciona driver, origen y destino antes de asignar",
+              en: "Select a driver, origin, and destination before assigning",
+            ),
+          ),
         ),
       );
       return;
@@ -69,15 +77,25 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
     }
     if (selected == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Driver no disponible en este momento")),
+        SnackBar(
+          content: Text(
+            t(
+              es: "Driver no disponible en este momento",
+              en: "Driver not available right now",
+            ),
+          ),
+        ),
       );
       return;
     }
     if (!_isDriverSelectable(selected, tripProvider)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            "Ese driver esta ocupado o no disponible. Selecciona otro.",
+            t(
+              es: "Ese driver esta ocupado o no disponible. Selecciona otro.",
+              en: "That driver is busy or unavailable. Select another one.",
+            ),
           ),
         ),
       );
@@ -184,7 +202,14 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
       if (mounted) {
         setState(() => _quoteLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("No se pudo resolver la ruta")),
+          SnackBar(
+            content: Text(
+              context.txt(
+                es: "No se pudo resolver la ruta",
+                en: "The route could not be resolved",
+              ),
+            ),
+          ),
         );
       }
       return null;
@@ -231,21 +256,29 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
   }
 
   LatLng? _resolveProximity(List<DriverModel> drivers) {
-    if (drivers.isEmpty) return null;
+    final locatedDrivers = drivers
+        .where(
+          (driver) =>
+              driver.location.latitude.abs() > 0.001 ||
+              driver.location.longitude.abs() > 0.001,
+        )
+        .toList();
+    if (locatedDrivers.isEmpty) return null;
 
     if (_selectedDriverId != null) {
-      for (final driver in drivers) {
+      for (final driver in locatedDrivers) {
         if (driver.id == _selectedDriverId) {
           return LatLng(driver.location.latitude, driver.location.longitude);
         }
       }
     }
 
-    final center = _mapService.centerFromDrivers(drivers);
+    final center = _mapService.centerFromDrivers(locatedDrivers);
     return center;
   }
 
   void _selectAddress(bool origin, AddressSuggestion item) {
+    unawaited(_mapService.rememberAddress(item));
     setState(() {
       if (origin) {
         _originCtrl.text = item.fullAddress;
@@ -284,14 +317,25 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
   }
 
   String _driverDispatchStatus(DriverModel driver, TripProvider tripProvider) {
-    if (!driver.isOnline) return "Offline";
-    if (_isDriverBusy(driver, tripProvider)) return "Ocupado en otro viaje";
-    if (!_isDriverVisible(driver)) return "No disponible";
-    return "Disponible";
+    if (!driver.isOnline) {
+      return context.txt(es: "Offline", en: "Offline");
+    }
+    if (_isDriverBusy(driver, tripProvider)) {
+      return context.txt(
+        es: "Ocupado en otro viaje",
+        en: "Busy on another trip",
+      );
+    }
+    if (!_isDriverVisible(driver)) {
+      return context.txt(es: "No disponible", en: "Unavailable");
+    }
+    return context.txt(es: "Disponible", en: "Available");
   }
 
   @override
   Widget build(BuildContext context) {
+    String t({required String es, required String en}) =>
+        context.txt(es: es, en: en);
     final drivers = context.watch<DriverProvider>().drivers;
     final tripProvider = context.watch<TripProvider>();
     final trips = tripProvider.trips;
@@ -312,14 +356,14 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  "Asignacion manual",
+                Text(
+                  t(es: "Asignacion manual", en: "Manual assignment"),
                   style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 10),
                 CustomInput(
                   controller: _originCtrl,
-                  hint: "Origen",
+                  hint: t(es: "Origen", en: "Origin"),
                   prefixIcon: Icons.trip_origin_rounded,
                   onChanged: (value) => _onAddressChanged(true, value),
                 ),
@@ -331,7 +375,7 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
                 const SizedBox(height: 10),
                 CustomInput(
                   controller: _destCtrl,
-                  hint: "Destino",
+                  hint: t(es: "Destino", en: "Destination"),
                   prefixIcon: Icons.flag_outlined,
                   onChanged: (value) => _onAddressChanged(false, value),
                 ),
@@ -350,7 +394,7 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
                 ],
                 const SizedBox(height: 12),
                 CustomButton(
-                  label: "Asignar viaje",
+                  label: t(es: "Asignar viaje", en: "Assign trip"),
                   onPressed: _assign,
                   leading: const Icon(Icons.send_rounded),
                 ),
@@ -359,21 +403,28 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
           ),
         ),
         const SizedBox(height: 16),
-        const Text(
-          "Selecciona driver",
+        Text(
+          t(es: "Selecciona driver", en: "Select driver"),
           style: TextStyle(fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 6),
         Text(
-          "Activos: ${activeDrivers.length} • Disponibles: $assignableCount • Ocupados: $busyCount",
+          context.isEnglish
+              ? "Active: ${activeDrivers.length} - Available: $assignableCount - Busy: $busyCount"
+              : "Activos: ${activeDrivers.length} - Disponibles: $assignableCount - Ocupados: $busyCount",
           style: const TextStyle(color: Colors.white70),
         ),
         const SizedBox(height: 10),
         if (activeDrivers.isEmpty)
-          const Card(
+          Card(
             child: Padding(
-              padding: EdgeInsets.all(14),
-              child: Text("No hay drivers conectados en este momento"),
+              padding: const EdgeInsets.all(14),
+              child: Text(
+                t(
+                  es: "No hay drivers conectados en este momento",
+                  en: "There are no connected drivers right now",
+                ),
+              ),
             ),
           ),
         ...activeDrivers.map((driver) {
@@ -393,7 +444,9 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text(
-                          "${driver.name} no esta disponible para asignacion",
+                          context.isEnglish
+                              ? "${driver.name} is not available for assignment"
+                              : "${driver.name} no esta disponible para asignacion",
                         ),
                       ),
                     );
@@ -406,16 +459,21 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
           );
         }),
         const SizedBox(height: 14),
-        const Text(
-          "Estado de viajes",
+        Text(
+          t(es: "Estado de viajes", en: "Trip status"),
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 10),
         if (trips.isEmpty)
-          const Card(
+          Card(
             child: Padding(
-              padding: EdgeInsets.all(14),
-              child: Text("Aun no hay viajes asignados"),
+              padding: const EdgeInsets.all(14),
+              child: Text(
+                t(
+                  es: "Aun no hay viajes asignados",
+                  en: "There are no assigned trips yet",
+                ),
+              ),
             ),
           ),
         ...trips.map(
@@ -507,19 +565,22 @@ class _AddressSuggestions extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (loading) {
-      return const Padding(
-        padding: EdgeInsets.fromLTRB(6, 6, 6, 0),
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(6, 6, 6, 0),
         child: Row(
           children: [
-            SizedBox(
+            const SizedBox(
               width: 14,
               height: 14,
               child: CircularProgressIndicator(strokeWidth: 2),
             ),
-            SizedBox(width: 10),
+            const SizedBox(width: 10),
             Text(
-              "Buscando direcciones...",
-              style: TextStyle(fontSize: 12, color: Colors.white70),
+              context.txt(
+                es: "Buscando direcciones...",
+                en: "Searching addresses...",
+              ),
+              style: const TextStyle(fontSize: 12, color: Colors.white70),
             ),
           ],
         ),
@@ -563,6 +624,16 @@ class _AddressSuggestions extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 12.5, color: Colors.white70),
                 ),
+                trailing: item.isRecent
+                    ? Text(
+                        context.txt(es: "Visitado antes", en: "Visited before"),
+                        style: const TextStyle(
+                          color: Colors.white54,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      )
+                    : null,
                 onTap: () => onTap(item),
               ),
             )

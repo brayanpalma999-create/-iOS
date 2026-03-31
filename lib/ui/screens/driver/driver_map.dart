@@ -6,6 +6,8 @@ import "package:provider/provider.dart";
 import "../../../providers/driver_provider.dart";
 import "../../../providers/map_ui_provider.dart";
 import "../../../providers/trip_provider.dart";
+import "../../../services/location_service.dart";
+import "../../../utils/app_text.dart";
 import "../../../utils/constants.dart";
 import "../../widgets/map_marker.dart";
 
@@ -22,23 +24,68 @@ class _DriverMapState extends State<DriverMap> {
   bool _followMe = true;
   double _zoom = 16;
   LatLng? _lastAutoCenter;
+  bool _forceStableTiles = false;
+  DateTime? _lastTileErrorAt;
+  int _tileErrorBurst = 0;
+  bool _seededViewerLocation = false;
+  LatLng? _viewerLocation;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_seededViewerLocation) return;
+    _seededViewerLocation = true;
+    _primeViewerLocation();
+  }
+
+  Future<void> _primeViewerLocation() async {
+    final service = context.read<LocationService>();
+    try {
+      final current = await service.current();
+      if (!mounted) return;
+      setState(() {
+        _viewerLocation = LatLng(current.latitude, current.longitude);
+      });
+    } catch (_) {
+      // Avoid blocking map rendering when the first fix is still pending.
+    }
+  }
 
   void _centerOn(LatLng point) {
     _mapController.move(point, _zoom);
     _lastAutoCenter = point;
   }
 
+  void _onTileError(Object error) {
+    if (!AppConstants.hasMapboxToken || _forceStableTiles) return;
+    final now = DateTime.now();
+    final last = _lastTileErrorAt;
+    if (last != null && now.difference(last) <= const Duration(seconds: 4)) {
+      _tileErrorBurst += 1;
+    } else {
+      _tileErrorBurst = 1;
+    }
+    _lastTileErrorAt = now;
+    if (_tileErrorBurst >= 4 && mounted) {
+      setState(() => _forceStableTiles = true);
+    }
+  }
+
   TileLayer _baseLayer(MapThemeMode mode) {
-    final url = switch (mode) {
-      MapThemeMode.flow => AppConstants.tileModernUrl,
-      MapThemeMode.dark => AppConstants.tileNightUrl,
-      MapThemeMode.satellite => AppConstants.tileSatelliteUrl,
-    };
+    final mapboxEnabled = AppConstants.hasMapboxToken && !_forceStableTiles;
+    final url = mapboxEnabled
+        ? switch (mode) {
+            MapThemeMode.flow => AppConstants.tileModernUrl,
+            MapThemeMode.dark => AppConstants.tileNightUrl,
+            MapThemeMode.satellite => AppConstants.tileSatelliteUrl,
+          }
+        : AppConstants.tileFallbackUrl;
     return TileLayer(
       urlTemplate: url,
-      fallbackUrl: AppConstants.tileFallbackUrl,
+      fallbackUrl: AppConstants.tileFallbackBackupUrl,
       retinaMode: false,
-      tileDisplay: const TileDisplay.instantaneous(),
+      errorTileCallback: (_, error, stackTrace) => _onTileError(error),
+      evictErrorTileStrategy: EvictErrorTileStrategy.notVisibleRespectMargin,
       userAgentPackageName: "com.example.atob_app",
       keepBuffer: 1,
       panBuffer: 0,
@@ -53,28 +100,41 @@ class _DriverMapState extends State<DriverMap> {
     return meters > 20;
   }
 
+  bool _hasUsableLocation(LatLng point) {
+    return point.latitude.abs() > 0.001 || point.longitude.abs() > 0.001;
+  }
+
+  String _statusEnglish(String raw) {
+    final value = raw.toLowerCase();
+    if (value.startsWith("disponible")) return "Available (Visible)";
+    if (value.contains("invisible") || value.contains("no disponible")) {
+      return "Unavailable (Invisible)";
+    }
+    return raw;
+  }
+
   @override
   Widget build(BuildContext context) {
+    String t({required String es, required String en}) =>
+        context.txt(es: es, en: en);
     final mapTheme = context.watch<MapUiProvider>().themeMode;
     final driverProvider = context.watch<DriverProvider>();
     final self = driverProvider.self;
     final tripProvider = context.watch<TripProvider>();
-    final activeTrip = self == null
+    final activeTrip = self == null || self.currentTripId == null
         ? null
-        : tripProvider.latestActiveForDriver(self.id);
+        : tripProvider.byId(self.currentTripId!);
     final isVisible = (self?.status ?? "").toLowerCase().startsWith(
       "disponible",
     );
-    final point = LatLng(
-      self?.location.latitude ?? 19.4326,
-      self?.location.longitude ?? -99.1332,
-    );
-    final selfTrack = self == null
-        ? <LatLng>[]
-        : driverProvider
-              .pathForDriver(self.id)
-              .map((p) => LatLng(p.latitude, p.longitude))
-              .toList();
+    final selfPoint = self == null
+        ? null
+        : LatLng(self.location.latitude, self.location.longitude);
+    final hasRealSelfLocation =
+        selfPoint != null && _hasUsableLocation(selfPoint);
+    final point = hasRealSelfLocation
+        ? selfPoint
+        : (_viewerLocation ?? const LatLng(37.0902, -95.7129));
     final hasAssignedTrip =
         activeTrip != null &&
         (activeTrip.status == "assigned" || activeTrip.status == "accepted");
@@ -83,7 +143,6 @@ class _DriverMapState extends State<DriverMap> {
         : activeTrip.routePoints
               .map((p) => LatLng(p.latitude, p.longitude))
               .toList();
-    final showSelfTrack = hasAssignedTrip && selfTrack.length > 1;
 
     final mustMove = _followMe && _shouldRecenter(point);
     if (mustMove) {
@@ -103,7 +162,9 @@ class _DriverMapState extends State<DriverMap> {
               mapController: _mapController,
               options: MapOptions(
                 initialCenter: point,
-                initialZoom: 16,
+                initialZoom: !hasRealSelfLocation && _viewerLocation == null
+                    ? 4.4
+                    : 16,
                 maxZoom: 19,
                 onPositionChanged: (position, hasGesture) {
                   _zoom = position.zoom;
@@ -124,16 +185,6 @@ class _DriverMapState extends State<DriverMap> {
                       ),
                     ],
                   ),
-                if (showSelfTrack)
-                  PolylineLayer(
-                    polylines: [
-                      Polyline(
-                        points: selfTrack,
-                        strokeWidth: 2,
-                        color: Colors.cyanAccent.withValues(alpha: 0.75),
-                      ),
-                    ],
-                  ),
                 MarkerLayer(
                   markers: [
                     Marker(
@@ -141,8 +192,9 @@ class _DriverMapState extends State<DriverMap> {
                       width: 122,
                       height: 82,
                       child: MapMarker(
-                        label: self?.name ?? "Driver",
+                        label: self?.name ?? t(es: "Driver", en: "Driver"),
                         active: true,
+                        carMode: true,
                       ),
                     ),
                   ],
@@ -152,8 +204,35 @@ class _DriverMapState extends State<DriverMap> {
             Positioned(
               top: 10,
               left: 10,
-              child: _StatusChip(status: self?.status ?? "Offline"),
+              child: _StatusChip(
+                status: self == null
+                    ? (_viewerLocation == null
+                          ? t(
+                              es: "Buscando ubicacion...",
+                              en: "Looking for location...",
+                            )
+                          : t(es: "Ubicacion lista", en: "Location ready"))
+                    : hasRealSelfLocation
+                    ? (context.isEnglish
+                          ? _statusEnglish(self.status)
+                          : self.status)
+                    : t(
+                        es: "Concede ubicacion exacta",
+                        en: "Allow precise location",
+                      ),
+              ),
             ),
+            if (_forceStableTiles)
+              Positioned(
+                top: 46,
+                left: 10,
+                child: _StatusChip(
+                  status: t(
+                    es: "Modo mapa estable activo",
+                    en: "Stable map mode active",
+                  ),
+                ),
+              ),
             Positioned(
               right: 10,
               top: 96,
@@ -198,6 +277,7 @@ class _DriverMapState extends State<DriverMap> {
               bottom: 14,
               child: _AvailabilityDock(
                 isVisible: isVisible,
+                isEnglish: context.isEnglish,
                 onToggle: () {
                   final current = (self?.status ?? "").toLowerCase();
                   final next = current.startsWith("disponible")
@@ -258,9 +338,14 @@ class _StatusChip extends StatelessWidget {
 }
 
 class _AvailabilityDock extends StatelessWidget {
-  const _AvailabilityDock({required this.isVisible, required this.onToggle});
+  const _AvailabilityDock({
+    required this.isVisible,
+    required this.isEnglish,
+    required this.onToggle,
+  });
 
   final bool isVisible;
+  final bool isEnglish;
   final VoidCallback onToggle;
 
   @override
@@ -268,8 +353,10 @@ class _AvailabilityDock extends StatelessWidget {
     final color = isVisible ? const Color(0xFF2FEA8A) : const Color(0xFFFF5F73);
     final title = isVisible ? "VISIBLE" : "INVISIBLE";
     final subtitle = isVisible
-        ? "Recibiendo viajes"
-        : "Oculto sin asignaciones";
+        ? (isEnglish ? "Receiving trips" : "Recibiendo viajes")
+        : (isEnglish
+              ? "Hidden without assignments"
+              : "Oculto sin asignaciones");
 
     return InkWell(
       borderRadius: BorderRadius.circular(14),

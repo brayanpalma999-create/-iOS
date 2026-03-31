@@ -1,0 +1,645 @@
+import "package:flutter/material.dart";
+import "package:image_picker/image_picker.dart";
+import "package:provider/provider.dart";
+
+import "../../../providers/auth_provider.dart";
+import "../../../providers/chat_provider.dart";
+import "../../../providers/driver_provider.dart";
+import "../../../providers/map_ui_provider.dart";
+import "../../../providers/trip_provider.dart";
+import "../../../routes.dart";
+import "../../../utils/app_text.dart";
+import "../../widgets/account_avatar.dart";
+import "../../widgets/custom_button.dart";
+import "../../widgets/custom_input.dart";
+import "../../widgets/group_inbox_thread.dart";
+
+class AdminProfileSettingsPage extends StatefulWidget {
+  const AdminProfileSettingsPage({super.key});
+
+  @override
+  State<AdminProfileSettingsPage> createState() =>
+      _AdminProfileSettingsPageState();
+}
+
+class _AdminProfileSettingsPageState extends State<AdminProfileSettingsPage> {
+  final _displayNameCtrl = TextEditingController();
+  final _legalNameCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
+  final _addressCtrl = TextEditingController();
+  final _governmentIdCtrl = TextEditingController();
+  final ImagePicker _picker = ImagePicker();
+  bool _seeded = false;
+  bool _updatingAvatar = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_seeded) return;
+    _seeded = true;
+    final user = context.read<AuthProvider>().user;
+    _displayNameCtrl.text = user?.name ?? "";
+    _legalNameCtrl.text = user?.legalName ?? "";
+    _emailCtrl.text = user?.email ?? "";
+    _phoneCtrl.text = user?.phoneNumber ?? "";
+    _addressCtrl.text = user?.address ?? "";
+    _governmentIdCtrl.text = user?.governmentId ?? "";
+  }
+
+  @override
+  void dispose() {
+    _displayNameCtrl.dispose();
+    _legalNameCtrl.dispose();
+    _emailCtrl.dispose();
+    _phoneCtrl.dispose();
+    _addressCtrl.dispose();
+    _governmentIdCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickAvatar() async {
+    if (_updatingAvatar) return;
+    setState(() => _updatingAvatar = true);
+    try {
+      final file = await _picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 74,
+        maxWidth: 1200,
+      );
+      if (file == null || !mounted) return;
+      context.read<AuthProvider>().updateAvatarPath(file.path);
+    } finally {
+      if (mounted) {
+        setState(() => _updatingAvatar = false);
+      }
+    }
+  }
+
+  void _save() {
+    context.read<AuthProvider>().updateProfile(
+      displayName: _displayNameCtrl.text,
+      legalName: _legalNameCtrl.text,
+      email: _emailCtrl.text,
+      phoneNumber: _phoneCtrl.text,
+      address: _addressCtrl.text,
+      governmentId: _governmentIdCtrl.text,
+    );
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          context.txt(es: "Perfil actualizado", en: "Profile updated"),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    String t({required String es, required String en}) =>
+        context.txt(es: es, en: en);
+    final user = context.watch<AuthProvider>().user;
+
+    return _PageFrame(
+      title: t(es: "Perfil", en: "Profile"),
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          EditableAvatarCard(
+            title: t(es: "Foto de perfil", en: "Profile photo"),
+            subtitle: t(
+              es: "Actualiza la imagen principal de tu cuenta admin.",
+              en: "Update the main image of your admin account.",
+            ),
+            name: user?.name ?? t(es: "Admin", en: "Admin"),
+            avatarPath: user?.avatarPath,
+            busy: _updatingAvatar,
+            onPick: _pickAvatar,
+            onRemove: () => context.read<AuthProvider>().updateAvatarPath(null),
+          ),
+          const SizedBox(height: 12),
+          CustomInput(
+            controller: _displayNameCtrl,
+            hint: t(es: "Nombre visible", en: "Display name"),
+            prefixIcon: Icons.badge_outlined,
+          ),
+          const SizedBox(height: 10),
+          CustomInput(
+            controller: _legalNameCtrl,
+            hint: t(es: "Nombre legal completo", en: "Full legal name"),
+            prefixIcon: Icons.person_outline_rounded,
+          ),
+          const SizedBox(height: 10),
+          CustomInput(
+            controller: _emailCtrl,
+            hint: t(es: "Correo electronico", en: "Email"),
+            prefixIcon: Icons.alternate_email_rounded,
+          ),
+          const SizedBox(height: 10),
+          CustomInput(
+            controller: _phoneCtrl,
+            hint: t(es: "Telefono", en: "Phone"),
+            prefixIcon: Icons.phone_outlined,
+          ),
+          const SizedBox(height: 10),
+          CustomInput(
+            controller: _addressCtrl,
+            hint: t(es: "Direccion", en: "Address"),
+            prefixIcon: Icons.place_outlined,
+          ),
+          const SizedBox(height: 10),
+          CustomInput(
+            controller: _governmentIdCtrl,
+            hint: t(es: "Identificacion", en: "ID"),
+            prefixIcon: Icons.credit_card_outlined,
+          ),
+          const SizedBox(height: 18),
+          CustomButton(
+            label: t(es: "Guardar cambios", en: "Save changes"),
+            onPressed: _save,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class AdminPreferencesSettingsPage extends StatefulWidget {
+  const AdminPreferencesSettingsPage({super.key});
+
+  @override
+  State<AdminPreferencesSettingsPage> createState() =>
+      _AdminPreferencesSettingsPageState();
+}
+
+class _AdminPreferencesSettingsPageState
+    extends State<AdminPreferencesSettingsPage> {
+  bool _seeded = false;
+  late MapThemeMode _draftTheme;
+  late String _draftLanguage;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_seeded) return;
+    _seeded = true;
+    _draftTheme = context.read<MapUiProvider>().themeMode;
+    _draftLanguage = context.read<AuthProvider>().user?.languageCode ?? "es";
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    String t({required String es, required String en}) =>
+        context.txt(es: es, en: en);
+    final liveTheme = context.watch<MapUiProvider>().themeMode;
+    final liveLanguage =
+        context.watch<AuthProvider>().user?.languageCode ?? "es";
+    final hasChanges =
+        _draftTheme != liveTheme || _draftLanguage != liveLanguage;
+
+    return _PageFrame(
+      title: t(es: "Preferencias", en: "Preferences"),
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _SectionTitle(t(es: "Tema del mapa", en: "Map theme")),
+          const SizedBox(height: 10),
+          SegmentedButton<MapThemeMode>(
+            segments: [
+              ButtonSegment<MapThemeMode>(
+                value: MapThemeMode.flow,
+                icon: const Icon(Icons.map_rounded),
+                label: const Text("AtoB Flow"),
+              ),
+              ButtonSegment<MapThemeMode>(
+                value: MapThemeMode.dark,
+                icon: const Icon(Icons.dark_mode_rounded),
+                label: Text(t(es: "Oscuro", en: "Dark")),
+              ),
+              ButtonSegment<MapThemeMode>(
+                value: MapThemeMode.satellite,
+                icon: const Icon(Icons.satellite_alt_rounded),
+                label: Text(t(es: "Satelital", en: "Satellite")),
+              ),
+            ],
+            selected: {_draftTheme},
+            onSelectionChanged: (selection) =>
+                setState(() => _draftTheme = selection.first),
+          ),
+          const SizedBox(height: 18),
+          _SectionTitle(t(es: "Idioma", en: "Language")),
+          const SizedBox(height: 6),
+          SegmentedButton<String>(
+            segments: [
+              ButtonSegment<String>(value: "es", label: Text("Espanol")),
+              ButtonSegment<String>(value: "en", label: Text("English")),
+            ],
+            selected: {_draftLanguage},
+            onSelectionChanged: (selection) =>
+                setState(() => _draftLanguage = selection.first),
+          ),
+          const SizedBox(height: 12),
+          _HintCard(
+            text: t(
+              es: "Los cambios quedan listos y solo se aplican cuando presionas el boton inferior.",
+              en: "Changes stay pending until you press the button below.",
+            ),
+          ),
+          const SizedBox(height: 18),
+          CustomButton(
+            label: t(es: "Aplicar cambios", en: "Apply changes"),
+            onPressed: () {
+              if (!hasChanges) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      t(
+                        es: "No hay cambios pendientes",
+                        en: "There are no pending changes",
+                      ),
+                    ),
+                  ),
+                );
+                return;
+              }
+              context.read<MapUiProvider>().setThemeMode(_draftTheme);
+              context.read<AuthProvider>().setLanguageCode(_draftLanguage);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    t(es: "Preferencias aplicadas", en: "Preferences applied"),
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class AdminInboxSettingsPage extends StatefulWidget {
+  const AdminInboxSettingsPage({super.key});
+
+  @override
+  State<AdminInboxSettingsPage> createState() => _AdminInboxSettingsPageState();
+}
+
+class _AdminInboxSettingsPageState extends State<AdminInboxSettingsPage> {
+  @override
+  Widget build(BuildContext context) {
+    String t({required String es, required String en}) =>
+        context.txt(es: es, en: en);
+    final drivers = context
+        .watch<DriverProvider>()
+        .drivers
+        .where((driver) => driver.isOnline)
+        .toList();
+    final tripProvider = context.watch<TripProvider>();
+    final chat = context.watch<ChatProvider>();
+
+    return _PageFrame(
+      title: t(es: "Inbox", en: "Inbox"),
+      child: DefaultTabController(
+        length: 2,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF101214),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0x22FFFFFF)),
+                ),
+                child: TabBar(
+                  tabs: [
+                    Tab(
+                      text: t(es: "Resumen", en: "Overview"),
+                    ),
+                    Tab(
+                      text: t(es: "Chat", en: "Chat"),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Expanded(
+              child: TabBarView(
+                children: [
+                  ListView(
+                    padding: const EdgeInsets.all(16),
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _StatCard(
+                              label: t(
+                                es: "Flota conectada",
+                                en: "Connected fleet",
+                              ),
+                              value: context.isEnglish
+                                  ? "${drivers.length} online"
+                                  : "${drivers.length} en linea",
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _StatCard(
+                              label: t(es: "Viaje activo", en: "Active trip"),
+                              value: tripProvider.totalActiveTrips().toString(),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _StatCard(
+                              label: t(es: "Mensajes", en: "Messages"),
+                              value: chat.groupMessageCount.toString(),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      _HintCard(
+                        text: t(
+                          es: "Inbox conserva el resumen operativo y ademas agrega mensajeria grupal con fotos entre admin y drivers.",
+                          en: "Inbox keeps the operational summary and also adds group photo messaging between admin and drivers.",
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      _HintCard(
+                        text: t(
+                          es: "Flota conectada, viaje activo y mensajes se mantienen visibles porque siguen siendo utiles para la operacion diaria.",
+                          en: "Connected fleet, active trip, and messages remain visible because they are still useful for daily operations.",
+                        ),
+                      ),
+                    ],
+                  ),
+                  ListView(
+                    padding: const EdgeInsets.all(16),
+                    children: [
+                      GroupInboxThread(
+                        emptyLabel: t(
+                          es: "Todavia no hay mensajes en el grupo",
+                          en: "There are no group messages yet",
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class AdminSecuritySettingsPage extends StatefulWidget {
+  const AdminSecuritySettingsPage({super.key});
+
+  @override
+  State<AdminSecuritySettingsPage> createState() =>
+      _AdminSecuritySettingsPageState();
+}
+
+class _AdminSecuritySettingsPageState extends State<AdminSecuritySettingsPage> {
+  final _currentPasswordCtrl = TextEditingController();
+  final _newPasswordCtrl = TextEditingController();
+  final _confirmPasswordCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _currentPasswordCtrl.dispose();
+    _newPasswordCtrl.dispose();
+    _confirmPasswordCtrl.dispose();
+    super.dispose();
+  }
+
+  void _savePassword() {
+    String t({required String es, required String en}) =>
+        context.txt(es: es, en: en);
+    if (_newPasswordCtrl.text.trim() != _confirmPasswordCtrl.text.trim()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            t(
+              es: "La confirmacion no coincide",
+              en: "The confirmation does not match",
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+    final error = context.read<AuthProvider>().changePassword(
+      currentPassword: _currentPasswordCtrl.text,
+      newPassword: _newPasswordCtrl.text,
+    );
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(switch (error) {
+          "current_password_mismatch" => t(
+            es: "La contrasena actual no coincide",
+            en: "The current password does not match",
+          ),
+          "password_too_short" => t(
+            es: "Usa minimo 6 caracteres",
+            en: "Use at least 6 characters",
+          ),
+          _ => t(es: "Contrasena actualizada", en: "Password updated"),
+        }),
+      ),
+    );
+    if (error == null) {
+      _currentPasswordCtrl.clear();
+      _newPasswordCtrl.clear();
+      _confirmPasswordCtrl.clear();
+    }
+  }
+
+  void _deleteLocalAccount() {
+    context.read<ChatProvider>().clearSession();
+    context.read<AuthProvider>().logout();
+    context.read<TripProvider>().clearAll();
+    Navigator.of(
+      context,
+    ).pushNamedAndRemoveUntil(AppRoutes.login, (_) => false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    String t({required String es, required String en}) =>
+        context.txt(es: es, en: en);
+    final updatedAt = context.watch<AuthProvider>().passwordUpdatedAt;
+    final stamp = updatedAt == null
+        ? t(
+            es: "Aun no hay una actualizacion de contrasena registrada.",
+            en: "There is no recorded password update yet.",
+          )
+        : t(
+            es: "Ultima actualizacion: ${updatedAt.day.toString().padLeft(2, "0")}/${updatedAt.month.toString().padLeft(2, "0")}/${updatedAt.year} ${updatedAt.hour.toString().padLeft(2, "0")}:${updatedAt.minute.toString().padLeft(2, "0")}",
+            en: "Last update: ${updatedAt.month.toString().padLeft(2, "0")}/${updatedAt.day.toString().padLeft(2, "0")}/${updatedAt.year} ${updatedAt.hour.toString().padLeft(2, "0")}:${updatedAt.minute.toString().padLeft(2, "0")}",
+          );
+
+    return _PageFrame(
+      title: t(es: "Seguridad", en: "Security"),
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _HintCard(
+            text: t(
+              es: "Para cambiar la contrasena se valida primero la actual. Si nunca definiste una, el campo actual puede quedar vacio.",
+              en: "To change the password, the current one is checked first. If you have never set one, the current field can stay empty.",
+            ),
+          ),
+          const SizedBox(height: 12),
+          CustomInput(
+            controller: _currentPasswordCtrl,
+            hint: t(es: "Contrasena actual", en: "Current password"),
+            obscureText: true,
+            prefixIcon: Icons.lock_clock_outlined,
+          ),
+          const SizedBox(height: 10),
+          CustomInput(
+            controller: _newPasswordCtrl,
+            hint: t(es: "Nueva contrasena", en: "New password"),
+            obscureText: true,
+            prefixIcon: Icons.lock_outline_rounded,
+          ),
+          const SizedBox(height: 10),
+          CustomInput(
+            controller: _confirmPasswordCtrl,
+            hint: t(
+              es: "Confirmar nueva contrasena",
+              en: "Confirm new password",
+            ),
+            obscureText: true,
+            prefixIcon: Icons.verified_user_outlined,
+          ),
+          const SizedBox(height: 14),
+          CustomButton(
+            label: t(es: "Guardar contrasena", en: "Save password"),
+            onPressed: _savePassword,
+          ),
+          const SizedBox(height: 12),
+          _HintCard(text: stamp),
+          const SizedBox(height: 18),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1012),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: const Color(0x46FF667A)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  t(es: "Eliminar acceso local", en: "Remove local access"),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFFFFA6B3),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  t(
+                    es: "Esto limpia la sesion local del dispositivo y elimina el acceso actual.",
+                    en: "This clears the local device session and removes the current access.",
+                  ),
+                  style: const TextStyle(color: Colors.white70, height: 1.35),
+                ),
+                const SizedBox(height: 14),
+                CustomButton(
+                  label: t(
+                    es: "Eliminar cuenta local",
+                    en: "Remove local account",
+                  ),
+                  onPressed: _deleteLocalAccount,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PageFrame extends StatelessWidget {
+  const _PageFrame({required this.title, required this.child});
+
+  final String title;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(title)),
+      body: child,
+    );
+  }
+}
+
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      label,
+      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+    );
+  }
+}
+
+class _HintCard extends StatelessWidget {
+  const _HintCard({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF101214),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0x22FFFFFF)),
+      ),
+      child: Text(text, style: const TextStyle(color: Colors.white70)),
+    );
+  }
+}
+
+class _StatCard extends StatelessWidget {
+  const _StatCard({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF101214),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0x22FFFFFF)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(color: Colors.white70)),
+          const SizedBox(height: 6),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.w900)),
+        ],
+      ),
+    );
+  }
+}

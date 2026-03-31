@@ -42,13 +42,22 @@ class TripProvider extends ChangeNotifier {
       originLocation: originLocation,
       destinationLocation: destinationLocation,
     );
-    _socketService.emit("assign:trip", trip.toJson());
+    final payload = trip.toJson();
+    payload["toDriverId"] = driverId;
+    payload["targetId"] = driverId;
+    _socketService.emit("assign:trip", payload);
     return trip;
   }
 
   void setTripStatus({required String tripId, required String status}) {
     _tripService.updateStatus(tripId, status);
-    _socketService.emit("trip:$status", {"tripId": tripId});
+    final trip = _tripService.byId(tripId);
+    _socketService.emit("trip:$status", {
+      "tripId": tripId,
+      "id": tripId,
+      "status": status,
+      if (trip != null) "driverId": trip.driverId,
+    });
     notifyListeners();
   }
 
@@ -57,6 +66,8 @@ class TripProvider extends ChangeNotifier {
 
   TripModel? latestActiveForDriver(String driverId) =>
       _tripService.latestActiveForDriver(driverId);
+
+  TripModel? byId(String id) => _tripService.byId(id);
 
   int totalTrips({String? driverId}) =>
       _tripService.totalTrips(driverId: driverId);
@@ -84,6 +95,11 @@ class TripProvider extends ChangeNotifier {
 
   double averageDistanceMiles({String? driverId}) =>
       _tripService.averageDistanceMiles(driverId: driverId);
+
+  void clearAll() {
+    _tripService.clear();
+    notifyListeners();
+  }
 
   void ingestAssignedTrip(dynamic payload) {
     final map = _asStringMap(payload);
@@ -149,6 +165,14 @@ class TripProvider extends ChangeNotifier {
     });
     _socketService.on("trip:update", (payload) {
       ingestAssignedTrip(payload);
+    });
+    _socketService.on("trip:completed", (payload) {
+      final map = _asStringMap(payload);
+      if (map == null) return;
+      final id = _stringValue(map["tripId"] ?? map["id"]);
+      if (id == null || id.isEmpty) return;
+      _tripService.updateStatus(id, "completed");
+      notifyListeners();
     });
   }
 

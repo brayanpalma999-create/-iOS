@@ -2,8 +2,11 @@ import "package:flutter/material.dart";
 import "package:provider/provider.dart";
 
 import "../../../providers/driver_provider.dart";
+import "../../../utils/app_text.dart";
 import "../../widgets/app_shell.dart";
+import "../../widgets/help_sheet.dart";
 import "admin_assign_trip.dart";
+import "admin_earnings.dart";
 import "admin_intercom.dart";
 import "admin_map.dart";
 import "admin_settings.dart";
@@ -22,39 +25,66 @@ class _AdminHomeState extends State<AdminHome> {
     AdminMap(),
     AdminAssignTrip(),
     AdminIntercom(),
+    AdminEarnings(),
     AdminSettings(),
   ];
 
   @override
   Widget build(BuildContext context) {
+    String t({required String es, required String en}) =>
+        context.txt(es: es, en: en);
     final online = context
         .watch<DriverProvider>()
         .drivers
         .where((d) => d.isOnline)
         .length;
+    final title = switch (_index) {
+      1 => t(es: "Centro de operaciones", en: "Operations center"),
+      2 => t(es: "Intercom", en: "Intercom"),
+      3 => t(es: "Ganancias", en: "Earnings"),
+      4 => t(es: "Cuenta", en: "Account"),
+      _ => t(es: "Mapa operativo", en: "Operations map"),
+    };
+    final helpTopic = switch (_index) {
+      1 => AtoBHelpTopic.adminAssign,
+      2 => AtoBHelpTopic.intercom,
+      3 => AtoBHelpTopic.adminEarnings,
+      4 => AtoBHelpTopic.account,
+      _ => AtoBHelpTopic.adminMap,
+    };
+
     return Scaffold(
       body: AppShell(
         child: Column(
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
               child: Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: Text(
-                      "Centro de Operaciones",
-                      style: TextStyle(
-                        fontSize: 26,
+                      title,
+                      style: const TextStyle(
+                        fontSize: 21,
                         fontWeight: FontWeight.w800,
                         letterSpacing: -0.4,
                       ),
                     ),
                   ),
-                  _Pill(
-                    icon: Icons.circle,
-                    text: "$online online",
-                    color: Colors.greenAccent,
+                  IconButton.filledTonal(
+                    onPressed: () =>
+                        showAtoBHelpSheet(context, topic: helpTopic),
+                    icon: const Icon(Icons.help_outline_rounded),
                   ),
+                  const SizedBox(width: 8),
+                  if (_index <= 1)
+                    _Pill(
+                      icon: Icons.circle,
+                      text: context.isEnglish
+                          ? "$online online"
+                          : "$online en linea",
+                      color: Colors.greenAccent,
+                    ),
                 ],
               ),
             ),
@@ -85,19 +115,34 @@ class _AdminHomeState extends State<AdminHome> {
           selectedIndex: _index,
           onDestinationSelected: (i) => setState(() => _index = i),
           backgroundColor: Colors.transparent,
-          destinations: const [
-            NavigationDestination(icon: Icon(Icons.map_rounded), label: "Mapa"),
+          destinations: [
             NavigationDestination(
-              icon: Icon(Icons.alt_route_rounded),
-              label: "Asignar",
+              icon: const Icon(Icons.map_rounded),
+              label: t(es: "Mapa", en: "Map"),
             ),
             NavigationDestination(
-              icon: Icon(Icons.mic_rounded),
-              label: "Intercom",
+              icon: const Icon(Icons.alt_route_rounded),
+              label: t(es: "Asignar", en: "Assign"),
             ),
             NavigationDestination(
-              icon: Icon(Icons.settings_rounded),
-              label: "Ajustes",
+              icon: const Icon(Icons.mic_rounded),
+              label: t(es: "Intercom", en: "Intercom"),
+            ),
+            NavigationDestination(
+              icon: const Icon(Icons.payments_rounded),
+              label: t(es: "Ganancias", en: "Earnings"),
+            ),
+            NavigationDestination(
+              icon: CircleAvatar(
+                radius: 13,
+                backgroundColor: Color(0x1F3DDC97),
+                child: Icon(
+                  Icons.person_rounded,
+                  size: 16,
+                  color: Color(0xFF8DF5C6),
+                ),
+              ),
+              label: t(es: "Cuenta", en: "Account"),
             ),
           ],
         ),

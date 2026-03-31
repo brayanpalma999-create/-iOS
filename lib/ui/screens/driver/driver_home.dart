@@ -2,7 +2,10 @@ import "package:flutter/material.dart";
 import "package:provider/provider.dart";
 
 import "../../../providers/driver_provider.dart";
+import "../../../utils/app_text.dart";
 import "../../widgets/app_shell.dart";
+import "../../widgets/help_sheet.dart";
+import "driver_earnings.dart";
 import "driver_intercom.dart";
 import "driver_map.dart";
 import "driver_settings.dart";
@@ -22,30 +25,53 @@ class _DriverHomeState extends State<DriverHome> {
     DriverMap(),
     DriverTripScreen(),
     DriverIntercom(),
+    DriverEarnings(),
     DriverSettings(),
   ];
 
   @override
   Widget build(BuildContext context) {
+    String t({required String es, required String en}) =>
+        context.txt(es: es, en: en);
     final self = context.watch<DriverProvider>().self;
+    final title = switch (_index) {
+      1 => t(es: "Ruta", en: "Route"),
+      2 => t(es: "Intercom", en: "Intercom"),
+      3 => t(es: "Ganancias", en: "Earnings"),
+      4 => t(es: "Cuenta", en: "Account"),
+      _ => t(es: "Mapa", en: "Map"),
+    };
+    final helpTopic = switch (_index) {
+      1 => AtoBHelpTopic.driverRoute,
+      2 => AtoBHelpTopic.intercom,
+      3 => AtoBHelpTopic.driverEarnings,
+      4 => AtoBHelpTopic.account,
+      _ => AtoBHelpTopic.driverMap,
+    };
     return Scaffold(
       body: AppShell(
         child: Column(
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
               child: Row(
                 children: [
                   Expanded(
                     child: Text(
-                      "Conductor ${self?.name ?? ''}".trim(),
+                      title,
                       style: const TextStyle(
-                        fontSize: 26,
+                        fontSize: 21,
                         fontWeight: FontWeight.w800,
                         letterSpacing: -0.4,
                       ),
                     ),
                   ),
+                  IconButton.filledTonal(
+                    onPressed: () =>
+                        showAtoBHelpSheet(context, topic: helpTopic),
+                    icon: const Icon(Icons.help_outline_rounded),
+                  ),
+                  const SizedBox(width: 8),
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 10,
@@ -57,7 +83,7 @@ class _DriverHomeState extends State<DriverHome> {
                       border: Border.all(color: const Color(0x2EFFFFFF)),
                     ),
                     child: Text(
-                      self?.status ?? "Offline",
+                      self?.status ?? t(es: "Sin conexion", en: "Offline"),
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
                   ),
@@ -91,19 +117,34 @@ class _DriverHomeState extends State<DriverHome> {
           selectedIndex: _index,
           onDestinationSelected: (i) => setState(() => _index = i),
           backgroundColor: Colors.transparent,
-          destinations: const [
-            NavigationDestination(icon: Icon(Icons.map_rounded), label: "Mapa"),
+          destinations: [
             NavigationDestination(
-              icon: Icon(Icons.route_rounded),
-              label: "Viaje",
+              icon: const Icon(Icons.map_rounded),
+              label: t(es: "Mapa", en: "Map"),
             ),
             NavigationDestination(
-              icon: Icon(Icons.mic_rounded),
-              label: "Intercom",
+              icon: const Icon(Icons.route_rounded),
+              label: t(es: "Ruta", en: "Route"),
             ),
             NavigationDestination(
-              icon: Icon(Icons.settings_rounded),
-              label: "Ajustes",
+              icon: const Icon(Icons.mic_rounded),
+              label: t(es: "Intercom", en: "Intercom"),
+            ),
+            NavigationDestination(
+              icon: const Icon(Icons.payments_rounded),
+              label: t(es: "Ganancias", en: "Earnings"),
+            ),
+            NavigationDestination(
+              icon: CircleAvatar(
+                radius: 13,
+                backgroundColor: Color(0x1F3DDC97),
+                child: Icon(
+                  Icons.person_rounded,
+                  size: 16,
+                  color: Color(0xFF8DF5C6),
+                ),
+              ),
+              label: t(es: "Cuenta", en: "Account"),
             ),
           ],
         ),

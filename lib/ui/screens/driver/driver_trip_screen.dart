@@ -1,7 +1,6 @@
 import "package:flutter/material.dart";
 import "package:provider/provider.dart";
 
-import "../../../models/trip_model.dart";
 import "../../../providers/driver_provider.dart";
 import "../../../providers/trip_provider.dart";
 import "../../../utils/helpers.dart";
@@ -10,23 +9,15 @@ import "../../widgets/custom_button.dart";
 class DriverTripScreen extends StatelessWidget {
   const DriverTripScreen({super.key});
 
-  TripModel? _findTrip(List<TripModel> trips, String? driverId) {
-    if (driverId == null) return null;
-    for (final trip in trips) {
-      if (trip.driverId != driverId) continue;
-      if (trip.status == "assigned" || trip.status == "accepted") {
-        return trip;
-      }
-    }
-    return null;
-  }
-
   @override
   Widget build(BuildContext context) {
     final self = context.watch<DriverProvider>().self;
-    final trip = _findTrip(context.watch<TripProvider>().trips, self?.id);
+    final tripProvider = context.watch<TripProvider>();
+    final tripId = self?.currentTripId;
+    final trip = tripId == null ? null : tripProvider.byId(tripId);
 
-    if (trip == null) {
+    if (trip == null ||
+        (trip.status != "assigned" && trip.status != "accepted")) {
       return const Center(
         child: Card(
           child: Padding(
@@ -58,7 +49,7 @@ class DriverTripScreen extends StatelessWidget {
                 const SizedBox(height: 8),
                 Text("Destino: ${trip.destination}"),
                 const SizedBox(height: 8),
-                Text("Estado: ${trip.status}"),
+                Text("Estado: ${statusLabel(trip.status)}"),
                 const SizedBox(height: 8),
                 Text(
                   trip.distanceMiles > 0
@@ -83,20 +74,13 @@ class DriverTripScreen extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 16),
-        CustomButton(
-          label: "Aceptar",
-          leading: const Icon(Icons.check_circle_outline),
-          onPressed: () =>
-              context.read<DriverProvider>().setTripDecision(trip.id, true),
-        ),
-        const SizedBox(height: 10),
-        CustomButton(
-          inverted: true,
-          label: "Rechazar",
-          leading: const Icon(Icons.close_rounded),
-          onPressed: () =>
-              context.read<DriverProvider>().setTripDecision(trip.id, false),
-        ),
+        if (trip.status == "assigned")
+          CustomButton(
+            label: "Iniciar ruta",
+            leading: const Icon(Icons.play_arrow_rounded),
+            onPressed: () =>
+                context.read<DriverProvider>().startAssignedTrip(trip.id),
+          ),
       ],
     );
   }

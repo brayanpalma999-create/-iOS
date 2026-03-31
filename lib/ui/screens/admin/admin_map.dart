@@ -6,7 +6,9 @@ import "package:provider/provider.dart";
 import "../../../providers/driver_provider.dart";
 import "../../../providers/map_ui_provider.dart";
 import "../../../providers/trip_provider.dart";
+import "../../../services/location_service.dart";
 import "../../../services/map_service.dart";
+import "../../../utils/app_text.dart";
 import "../../../utils/constants.dart";
 import "../../widgets/map_marker.dart";
 
@@ -23,18 +25,63 @@ class _AdminMapState extends State<AdminMap> {
   bool _followFleet = true;
   double _zoom = 14;
   LatLng? _lastAutoCenter;
+  bool _forceStableTiles = false;
+  DateTime? _lastTileErrorAt;
+  int _tileErrorBurst = 0;
+  bool _seededViewerLocation = false;
+  LatLng? _viewerLocation;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_seededViewerLocation) return;
+    _seededViewerLocation = true;
+    _primeViewerLocation();
+  }
+
+  Future<void> _primeViewerLocation() async {
+    final service = context.read<LocationService>();
+    try {
+      final current = await service.current();
+      if (!mounted) return;
+      setState(() {
+        _viewerLocation = LatLng(current.latitude, current.longitude);
+      });
+    } catch (_) {
+      // Keep map usable even if location takes longer than expected.
+    }
+  }
+
+  void _onTileError(Object error) {
+    if (!AppConstants.hasMapboxToken || _forceStableTiles) return;
+    final now = DateTime.now();
+    final last = _lastTileErrorAt;
+    if (last != null && now.difference(last) <= const Duration(seconds: 4)) {
+      _tileErrorBurst += 1;
+    } else {
+      _tileErrorBurst = 1;
+    }
+    _lastTileErrorAt = now;
+    if (_tileErrorBurst >= 4 && mounted) {
+      setState(() => _forceStableTiles = true);
+    }
+  }
 
   TileLayer _baseLayer(MapThemeMode mode) {
-    final url = switch (mode) {
-      MapThemeMode.flow => AppConstants.tileModernUrl,
-      MapThemeMode.dark => AppConstants.tileNightUrl,
-      MapThemeMode.satellite => AppConstants.tileSatelliteUrl,
-    };
+    final mapboxEnabled = AppConstants.hasMapboxToken && !_forceStableTiles;
+    final url = mapboxEnabled
+        ? switch (mode) {
+            MapThemeMode.flow => AppConstants.tileModernUrl,
+            MapThemeMode.dark => AppConstants.tileNightUrl,
+            MapThemeMode.satellite => AppConstants.tileSatelliteUrl,
+          }
+        : AppConstants.tileFallbackUrl;
     return TileLayer(
       urlTemplate: url,
-      fallbackUrl: AppConstants.tileFallbackUrl,
+      fallbackUrl: AppConstants.tileFallbackBackupUrl,
       retinaMode: false,
-      tileDisplay: const TileDisplay.instantaneous(),
+      errorTileCallback: (_, error, stackTrace) => _onTileError(error),
+      evictErrorTileStrategy: EvictErrorTileStrategy.notVisibleRespectMargin,
       userAgentPackageName: "com.example.atob_app",
       keepBuffer: 1,
       panBuffer: 0,
@@ -54,42 +101,81 @@ class _AdminMapState extends State<AdminMap> {
     return meters > 30;
   }
 
-  Color _driverTrackColor(String id) {
-    final bucket = id.codeUnits.fold<int>(0, (sum, c) => sum + c) % 4;
-    switch (bucket) {
-      case 0:
-        return Colors.cyanAccent;
-      case 1:
-        return Colors.lightGreenAccent;
-      case 2:
-        return Colors.orangeAccent;
-      default:
-        return Colors.pinkAccent;
+  bool _hasRenderableLocation(dynamic driver) {
+    return driver.location.latitude.abs() > 0.001 ||
+        driver.location.longitude.abs() > 0.001;
+  }
+
+  List<_Hotspot> _buildHotspots(List<dynamic> drivers) {
+    final points = drivers
+        .where((driver) => driver.isOnline && _hasRenderableLocation(driver))
+        .map(
+          (driver) =>
+              LatLng(driver.location.latitude, driver.location.longitude),
+        )
+        .toList();
+    if (points.isEmpty) return <_Hotspot>[];
+
+    final hotspots = <_Hotspot>[];
+    final consumed = <int>{};
+    for (var i = 0; i < points.length; i++) {
+      if (consumed.contains(i)) continue;
+      final cluster = <LatLng>[points[i]];
+      consumed.add(i);
+      for (var j = i + 1; j < points.length; j++) {
+        if (consumed.contains(j)) continue;
+        final meters = _distance.as(LengthUnit.Meter, points[i], points[j]);
+        if (meters <= 1400) {
+          cluster.add(points[j]);
+          consumed.add(j);
+        }
+      }
+      if (cluster.length < 2) continue;
+      final lat =
+          cluster.fold<double>(0, (sum, item) => sum + item.latitude) /
+          cluster.length;
+      final lng =
+          cluster.fold<double>(0, (sum, item) => sum + item.longitude) /
+          cluster.length;
+      hotspots.add(
+        _Hotspot(center: LatLng(lat, lng), strength: cluster.length),
+      );
     }
+    return hotspots;
   }
 
   @override
   Widget build(BuildContext context) {
+    String t({required String es, required String en}) =>
+        context.txt(es: es, en: en);
     final mapTheme = context.watch<MapUiProvider>().themeMode;
     final allDrivers = context.watch<DriverProvider>().drivers;
-    final driverProvider = context.watch<DriverProvider>();
+    final renderableDrivers = allDrivers.where(_hasRenderableLocation).toList();
     final trips = context.watch<TripProvider>().trips;
     final mapService = MapService();
-    final center = mapService.centerFromDrivers(allDrivers);
+    final center = renderableDrivers.isNotEmpty
+        ? mapService.centerFromDrivers(
+            renderableDrivers,
+            fallback: _viewerLocation,
+          )
+        : (_viewerLocation ?? const LatLng(37.0902, -95.7129));
     final online = allDrivers.where((d) => d.isOnline).length;
-
-    List<LatLng> activeTripRoute = <LatLng>[];
-    for (final trip in trips) {
-      if (trip.status != "assigned" && trip.status != "accepted") continue;
-      if (trip.routePoints.isEmpty) continue;
-      activeTripRoute = trip.routePoints
-          .map((p) => LatLng(p.latitude, p.longitude))
-          .toList();
-      break;
-    }
+    final hotspots = _buildHotspots(renderableDrivers);
+    final zoom = renderableDrivers.isEmpty
+        ? (_viewerLocation == null ? 4.4 : 14.8)
+        : mapService.dynamicZoom(renderableDrivers.length);
+    final activeTripRoutes = trips
+        .where((trip) => trip.status == "assigned" || trip.status == "accepted")
+        .map(
+          (trip) => trip.routePoints
+              .map((p) => LatLng(p.latitude, p.longitude))
+              .toList(),
+        )
+        .where((path) => path.length > 1)
+        .toList();
 
     final mustMove =
-        _followFleet && _shouldRecenter(center) && allDrivers.isNotEmpty;
+        _followFleet && _shouldRecenter(center) && renderableDrivers.isNotEmpty;
     if (mustMove) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -107,7 +193,7 @@ class _AdminMapState extends State<AdminMap> {
               mapController: _mapController,
               options: MapOptions(
                 initialCenter: center,
-                initialZoom: mapService.dynamicZoom(allDrivers.length),
+                initialZoom: zoom,
                 maxZoom: 19,
                 onPositionChanged: (position, hasGesture) {
                   _zoom = position.zoom;
@@ -118,37 +204,34 @@ class _AdminMapState extends State<AdminMap> {
               ),
               children: [
                 _baseLayer(mapTheme),
-                if (activeTripRoute.length > 1)
-                  PolylineLayer(
-                    polylines: [
-                      Polyline(
-                        points: activeTripRoute,
-                        strokeWidth: 4,
-                        color: AppConstants.accent.withValues(alpha: 0.9),
-                      ),
-                    ],
+                if (hotspots.isNotEmpty)
+                  CircleLayer(
+                    circles: hotspots
+                        .map(
+                          (hotspot) => CircleMarker(
+                            point: hotspot.center,
+                            radius: 18 + (hotspot.strength * 6),
+                            color: const Color(0x243DDC97),
+                            borderStrokeWidth: 1.4,
+                            borderColor: const Color(0x883DDC97),
+                          ),
+                        )
+                        .toList(),
                   ),
-                PolylineLayer(
-                  polylines: allDrivers
-                      .where(
-                        (d) => driverProvider.pathForDriver(d.id).length > 1,
-                      )
-                      .map(
-                        (driver) => Polyline(
-                          points: driverProvider
-                              .pathForDriver(driver.id)
-                              .map((p) => LatLng(p.latitude, p.longitude))
-                              .toList(),
-                          strokeWidth: 2,
-                          color: _driverTrackColor(
-                            driver.id,
-                          ).withValues(alpha: 0.6),
-                        ),
-                      )
-                      .toList(),
-                ),
+                if (activeTripRoutes.isNotEmpty)
+                  PolylineLayer(
+                    polylines: activeTripRoutes
+                        .map(
+                          (path) => Polyline(
+                            points: path,
+                            strokeWidth: 4,
+                            color: AppConstants.accent.withValues(alpha: 0.84),
+                          ),
+                        )
+                        .toList(),
+                  ),
                 MarkerLayer(
-                  markers: allDrivers
+                  markers: renderableDrivers
                       .map(
                         (d) => Marker(
                           point: LatLng(
@@ -157,7 +240,11 @@ class _AdminMapState extends State<AdminMap> {
                           ),
                           width: 122,
                           height: 82,
-                          child: MapMarker(label: d.name, active: d.isOnline),
+                          child: MapMarker(
+                            label: d.name,
+                            active: d.isOnline,
+                            carMode: true,
+                          ),
                         ),
                       )
                       .toList(),
@@ -168,7 +255,34 @@ class _AdminMapState extends State<AdminMap> {
               top: 10,
               left: 10,
               child: _StatChip(
-                label: "${allDrivers.length} drivers • $online online",
+                label: renderableDrivers.isEmpty && _viewerLocation == null
+                    ? t(
+                        es: "Buscando ubicacion...",
+                        en: "Looking for location...",
+                      )
+                    : "${allDrivers.length} drivers | $online online",
+              ),
+            ),
+            if (_forceStableTiles)
+              Positioned(
+                left: 10,
+                top: 48,
+                child: _StatChip(
+                  label: t(
+                    es: "Modo mapa estable activo",
+                    en: "Stable map mode active",
+                  ),
+                ),
+              ),
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 14,
+              child: _FleetDock(
+                totalDrivers: allDrivers.length,
+                onlineDrivers: online,
+                hotspotCount: hotspots.length,
+                isEnglish: context.isEnglish,
               ),
             ),
             Positioned(
@@ -196,6 +310,13 @@ class _AdminMapState extends State<AdminMap> {
       ),
     );
   }
+}
+
+class _Hotspot {
+  const _Hotspot({required this.center, required this.strength});
+
+  final LatLng center;
+  final int strength;
 }
 
 class _MapActions extends StatelessWidget {
@@ -273,6 +394,78 @@ class _StatChip extends StatelessWidget {
         border: Border.all(color: const Color(0x30FFFFFF)),
       ),
       child: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+    );
+  }
+}
+
+class _FleetDock extends StatelessWidget {
+  const _FleetDock({
+    required this.totalDrivers,
+    required this.onlineDrivers,
+    required this.hotspotCount,
+    required this.isEnglish,
+  });
+
+  final int totalDrivers;
+  final int onlineDrivers;
+  final int hotspotCount;
+  final bool isEnglish;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xDE0F1113),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0x28FFFFFF)),
+        boxShadow: const [
+          BoxShadow(color: Color(0x4C000000), blurRadius: 18, spreadRadius: 1),
+        ],
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.groups_rounded, color: Colors.white),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isEnglish ? "Active fleet" : "Flota activa",
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  isEnglish
+                      ? "$onlineDrivers online out of $totalDrivers signed in"
+                      : "$onlineDrivers online de $totalDrivers registrados en sesion",
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: const Color(0x191EDB9D),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: const Color(0x4F3DDC97)),
+            ),
+            child: Text(
+              "$hotspotCount hotspots",
+              style: const TextStyle(
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF8DF5C6),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

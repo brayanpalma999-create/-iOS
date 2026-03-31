@@ -104,7 +104,7 @@ class TripService {
         ? _trips
         : _trips.where((t) => t.driverId == driverId);
     return source
-        .where((t) => t.status == "accepted")
+        .where((t) => _isCompletedStatus(t.status))
         .fold<double>(0, (sum, t) => sum + t.fareUsd);
   }
 
@@ -112,7 +112,7 @@ class TripService {
     final source = driverId == null
         ? _trips
         : _trips.where((t) => t.driverId == driverId);
-    return source.where((t) => t.status == "accepted").length;
+    return source.where((t) => _isCompletedStatus(t.status)).length;
   }
 
   int rejectedTrips({String? driverId}) {
@@ -148,5 +148,13 @@ class TripService {
     if (valid.isEmpty) return 0;
     final total = valid.fold<double>(0, (sum, t) => sum + t.distanceMiles);
     return total / valid.length;
+  }
+
+  void clear() {
+    _trips.clear();
+  }
+
+  bool _isCompletedStatus(String status) {
+    return status == "completed" || status == "accepted";
   }
 }
