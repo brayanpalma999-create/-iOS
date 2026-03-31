@@ -310,7 +310,10 @@ class DriverProvider extends ChangeNotifier {
     _tripProvider.ingestAssignedTrip(map);
 
     final targetDriverId = _stringValue(
-      map["driverId"] ?? map["toDriverId"] ?? map["targetId"],
+      map["driverId"] ??
+          map["toDriverId"] ??
+          map["targetId"] ??
+          map["driverIntercomId"],
     );
     if (!_matchesSelfDriverId(targetDriverId)) return;
 
@@ -550,10 +553,14 @@ class DriverProvider extends ChangeNotifier {
     final target = driverId.trim();
     final targetLower = target.toLowerCase();
     final selfId = _self?.id.trim();
+    final intercomId = _self?.intercomId?.trim();
     final socketId = _socketService.socketId?.trim();
     final selfLower = selfId?.toLowerCase();
+    final intercomLower = intercomId?.toLowerCase();
     final socketLower = socketId?.toLowerCase();
     return (selfId != null && (target == selfId || targetLower == selfLower)) ||
+        (intercomId != null &&
+            (target == intercomId || targetLower == intercomLower)) ||
         (socketId != null &&
             (target == socketId || targetLower == socketLower));
   }

@@ -60,6 +60,7 @@ class IntercomProvider extends ChangeNotifier {
   int? _activeSpeakerUid;
   DateTime? _pttStartedAt;
   DateTime? _lastIncomingVoiceAt;
+  bool _remoteSpeakerPinned = false;
   int _transmitSeconds = 0;
   int _lastTransmissionSeconds = 0;
   String? _lastErrorMessage;
@@ -433,6 +434,7 @@ class IntercomProvider extends ChangeNotifier {
         return;
       case "ptt-start":
         unawaited(_applySpeakerRouting(uid: uid, payload: payload));
+        _remoteSpeakerPinned = true;
         _markRemoteSpeaker(
           uid: uid,
           id: _stringOrNull(payload["speakerId"]),
@@ -448,8 +450,11 @@ class IntercomProvider extends ChangeNotifier {
       case "ptt-stop":
         unawaited(_liveKitService.clearRemoteUserMutes());
         _mutedRemoteSpeakerUid = null;
+        _remoteSpeakerPinned = false;
         if (_activeSpeakerUid == uid && !_isTransmitting) {
           _clearIncomingSpeaker(notify: true);
+        } else {
+          notifyListeners();
         }
         return;
     }
@@ -508,6 +513,7 @@ class IntercomProvider extends ChangeNotifier {
       const Duration(milliseconds: 800),
       (_) {
         if (_isTransmitting) return;
+        if (_remoteSpeakerPinned) return;
         if (_hasFreshIncomingVoice()) return;
         _clearIncomingSpeaker(notify: true);
       },
@@ -527,6 +533,7 @@ class IntercomProvider extends ChangeNotifier {
         _activeSpeakerUid == _localParticipantUid) {
       return false;
     }
+    if (_remoteSpeakerPinned) return true;
     return _hasFreshIncomingVoice();
   }
 
@@ -540,6 +547,7 @@ class IntercomProvider extends ChangeNotifier {
 
   void _clearIncomingSpeaker({bool notify = false}) {
     _channelBusy = false;
+    _remoteSpeakerPinned = false;
     _activeSpeakerUid = null;
     _activeSpeakerId = null;
     _activeSpeakerRole = null;

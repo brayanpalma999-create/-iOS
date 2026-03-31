@@ -135,10 +135,9 @@ class _DriverMapState extends State<DriverMap> {
     final point = hasRealSelfLocation
         ? selfPoint
         : (_viewerLocation ?? const LatLng(37.0902, -95.7129));
-    final hasAssignedTrip =
-        activeTrip != null &&
-        (activeTrip.status == "assigned" || activeTrip.status == "accepted");
-    final routePath = !hasAssignedTrip
+    final hasStartedTrip =
+        activeTrip != null && activeTrip.status == "accepted";
+    final routePath = !hasStartedTrip
         ? <LatLng>[]
         : activeTrip.routePoints
               .map((p) => LatLng(p.latitude, p.longitude))

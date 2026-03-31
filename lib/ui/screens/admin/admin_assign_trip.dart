@@ -106,6 +106,7 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
 
     tripProvider.assignTrip(
       driverId: _selectedDriverId!,
+      driverIntercomId: selected.intercomId ?? selected.id,
       origin: _originCtrl.text.trim(),
       destination: _destCtrl.text.trim(),
       distanceMiles: estimate.distanceMiles,

@@ -22,6 +22,7 @@ class TripProvider extends ChangeNotifier {
 
   TripModel assignTrip({
     required String driverId,
+    String? driverIntercomId,
     required String origin,
     required String destination,
     double distanceMiles = 0,
@@ -45,6 +46,7 @@ class TripProvider extends ChangeNotifier {
     final payload = trip.toJson();
     payload["toDriverId"] = driverId;
     payload["targetId"] = driverId;
+    payload["driverIntercomId"] = driverIntercomId ?? driverId;
     _socketService.emit("assign:trip", payload);
     return trip;
   }
@@ -109,7 +111,8 @@ class TripProvider extends ChangeNotifier {
     final driverId = _stringValue(
       normalized["driverId"] ??
           normalized["toDriverId"] ??
-          normalized["targetId"],
+          normalized["targetId"] ??
+          normalized["driverIntercomId"],
     );
     if (tripId == null || driverId == null) return;
 

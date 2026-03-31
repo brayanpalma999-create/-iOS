@@ -1,6 +1,8 @@
 import "location_model.dart";
 import "user_model.dart";
 
+const Object _driverModelUnset = Object();
+
 class DriverModel extends UserModel {
   const DriverModel({
     required super.id,
@@ -40,7 +42,7 @@ class DriverModel extends UserModel {
     String? avatarPath,
     LocationModel? location,
     String? status,
-    String? currentTripId,
+    Object? currentTripId = _driverModelUnset,
   }) {
     return DriverModel(
       id: id ?? this.id,
@@ -55,7 +57,9 @@ class DriverModel extends UserModel {
       avatarPath: avatarPath ?? this.avatarPath,
       location: location ?? this.location,
       status: status ?? this.status,
-      currentTripId: currentTripId ?? this.currentTripId,
+      currentTripId: identical(currentTripId, _driverModelUnset)
+          ? this.currentTripId
+          : currentTripId as String?,
       isOnline: isOnline ?? this.isOnline,
     );
   }
