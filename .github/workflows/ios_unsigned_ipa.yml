@@ -59,7 +59,28 @@ jobs:
           if [ -n "${MAPBOX_TOKEN:-}" ]; then
             MAPBOX_DEFINE="--dart-define=MAPBOX_TOKEN=$MAPBOX_TOKEN"
           fi
-          flutter build ios --release --no-codesign --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" $MAPBOX_DEFINE
+          set +e
+          flutter build ios --release --no-codesign --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" $MAPBOX_DEFINE 2>&1 | tee build_ios.log
+          BUILD_EXIT=${PIPESTATUS[0]}
+          set -e
+          if [ "$BUILD_EXIT" -ne 0 ]; then
+            tail -n 120 build_ios.log > build_ios_tail.log || true
+            echo "### iOS build failure" >> "$GITHUB_STEP_SUMMARY"
+            cat build_ios_tail.log >> "$GITHUB_STEP_SUMMARY"
+            ERROR_TEXT=$(tr '\n' ' ' < build_ios_tail.log | sed 's/::/%3A%3A/g' | cut -c1-8000)
+            echo "::error file=.github/workflows/ios_unsigned_ipa.yml,line=53::${ERROR_TEXT}"
+            exit "$BUILD_EXIT"
+          fi
+
+      - name: Upload Build Log On Failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-log-${{ env.BUILD_NUMBER }}
+          path: |
+            build_ios.log
+            build_ios_tail.log
+          retention-days: 7
 
       - name: Package Unsigned IPA
         run: |
