@@ -5,14 +5,11 @@ import "../providers/auth_provider.dart";
 
 extension AtoBAppText on BuildContext {
   String txt({required String es, required String en}) {
-    final languageCode = select<AuthProvider, String>(
-      (auth) => auth.languageCode,
-    );
+    final languageCode = read<AuthProvider>().languageCode;
     return languageCode == "en" ? en : es;
   }
 
-  bool get isEnglish =>
-      select<AuthProvider, String>((auth) => auth.languageCode) == "en";
+  bool get isEnglish => read<AuthProvider>().languageCode == "en";
 
   String tripStatus(String raw) {
     switch (raw) {
