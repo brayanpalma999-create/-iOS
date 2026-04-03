@@ -1,6 +1,9 @@
 import "package:flutter/material.dart";
+import "package:latlong2/latlong.dart";
 import "package:provider/provider.dart";
 
+import "../../../models/driver_model.dart";
+import "../../../models/trip_model.dart";
 import "../../../providers/driver_provider.dart";
 import "../../../providers/trip_provider.dart";
 import "../../../utils/helpers.dart";
@@ -11,13 +14,22 @@ class DriverTripScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isEnglish = Localizations.localeOf(context).languageCode == "en";
     final self = context.watch<DriverProvider>().self;
     final tripProvider = context.watch<TripProvider>();
     final tripId = self?.currentTripId;
     final trip = tripId == null ? null : tripProvider.byId(tripId);
+    final canConfirmPickup = _canConfirmPickup(self, trip);
+    final eta = trip == null || trip.durationMinutes <= 0
+        ? null
+        : DateTime.now().add(
+            Duration(minutes: trip.durationMinutes.round()),
+          );
 
     if (trip == null ||
-        (trip.status != "assigned" && trip.status != "accepted")) {
+        (trip.status != "assigned" &&
+            trip.status != "accepted" &&
+            trip.status != "picked_up")) {
       return const Center(
         child: Card(
           child: Padding(
@@ -64,6 +76,16 @@ class DriverTripScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(
+                  eta == null
+                      ? (isEnglish
+                            ? "Estimated arrival: pending"
+                            : "Llegada estimada: pendiente")
+                      : (isEnglish
+                            ? "Estimated arrival: ${etaClock(eta)}"
+                            : "Llegada estimada: ${etaClock(eta)}"),
+                ),
+                const SizedBox(height: 6),
+                Text(
                   trip.fareUsd > 0
                       ? "Costo del viaje: ${usd(trip.fareUsd)}"
                       : "Costo del viaje: pendiente",
@@ -78,10 +100,50 @@ class DriverTripScreen extends StatelessWidget {
           CustomButton(
             label: "Iniciar ruta",
             leading: const Icon(Icons.play_arrow_rounded),
-            onPressed: () =>
+            onPressed: () async =>
                 context.read<DriverProvider>().startAssignedTrip(trip.id),
           ),
+        if (trip.status == "accepted") ...[
+          const SizedBox(height: 12),
+          if (canConfirmPickup)
+            CustomButton(
+              label: "Cliente recogido",
+              leading: const Icon(Icons.person_pin_circle_rounded),
+              onPressed: () async =>
+                  context.read<DriverProvider>().markPassengerPickedUp(trip.id),
+            )
+          else
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Text(
+                  isEnglish
+                      ? "Move closer to the pickup point before confirming the rider is onboard."
+                      : "Acercate al punto de recogida para confirmar que el cliente ya abordo.",
+                ),
+              ),
+            ),
+        ],
+        if (trip.status == "picked_up") ...[
+          const SizedBox(height: 12),
+          CustomButton(
+            label: "Finalizar viaje",
+            leading: const Icon(Icons.flag_circle_rounded),
+            onPressed: () =>
+                context.read<DriverProvider>().completeCurrentTrip(trip.id),
+          ),
+        ],
       ],
     );
+  }
+
+  bool _canConfirmPickup(DriverModel? self, TripModel? trip) {
+    if (self == null || trip == null) return false;
+    final origin = trip.originLocation;
+    if (origin == null) return true;
+    final here = LatLng(self.location.latitude, self.location.longitude);
+    final pickup = LatLng(origin.latitude, origin.longitude);
+    final meters = const Distance().as(LengthUnit.Meter, here, pickup);
+    return meters <= 120;
   }
 }

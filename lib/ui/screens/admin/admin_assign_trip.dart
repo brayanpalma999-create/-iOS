@@ -118,12 +118,12 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
           )
           .toList(),
       originLocation: LocationModel(
-        latitude: estimate.path.first.latitude,
-        longitude: estimate.path.first.longitude,
+        latitude: _originPoint!.latitude,
+        longitude: _originPoint!.longitude,
       ),
       destinationLocation: LocationModel(
-        latitude: estimate.path.last.latitude,
-        longitude: estimate.path.last.longitude,
+        latitude: _destPoint!.latitude,
+        longitude: _destPoint!.longitude,
       ),
     );
     setState(() {
@@ -187,47 +187,117 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
     }
 
     setState(() => _quoteLoading = true);
-    final proximity = _resolveProximity(context.read<DriverProvider>().drivers);
-    LatLng? from = _originPoint;
-    LatLng? to = _destPoint;
-    from ??= await _mapService.geocodeAddress(
-      _originCtrl.text.trim(),
-      proximity: proximity,
-    );
-    to ??= await _mapService.geocodeAddress(
-      _destCtrl.text.trim(),
-      proximity: proximity,
-    );
+    try {
+      final proximity = _resolveProximity(
+        context.read<DriverProvider>().drivers,
+      );
+      final drivers = context.read<DriverProvider>().drivers;
+      LatLng? from = _originPoint;
+      LatLng? to = _destPoint;
+      from ??= await _mapService.geocodeAddress(
+        _originCtrl.text.trim(),
+        proximity: proximity,
+      );
+      to ??= await _mapService.geocodeAddress(
+        _destCtrl.text.trim(),
+        proximity: proximity,
+      );
 
-    if (from == null || to == null) {
+      if (from == null || to == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                context.txt(
+                  es: "No se pudo resolver la ruta",
+                  en: "The route could not be resolved",
+                ),
+              ),
+            ),
+          );
+        }
+        return null;
+      }
+
+      final passengerEstimate = await _mapService.calculateRoute(
+        origin: from,
+        destination: to,
+      );
+      DriverModel? selectedDriver;
+      for (final driver in drivers) {
+        if (driver.id == _selectedDriverId) {
+          selectedDriver = driver;
+          break;
+        }
+      }
+      final driverPoint = selectedDriver == null
+          ? null
+          : LatLng(
+              selectedDriver.location.latitude,
+              selectedDriver.location.longitude,
+            );
+      final hasDriverPoint =
+          driverPoint != null &&
+          (driverPoint.latitude.abs() > 0.001 ||
+              driverPoint.longitude.abs() > 0.001);
+      final navigationEstimate = hasDriverPoint
+          ? await _mapService.calculateRouteChain(
+              stops: [driverPoint, from, to],
+            )
+          : passengerEstimate;
+      if (passengerEstimate == null && navigationEstimate == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                context.txt(
+                  es: "No se pudo calcular la ruta. Intenta otra direccion cercana.",
+                  en: "The route could not be calculated. Try a nearby address.",
+                ),
+              ),
+            ),
+          );
+        }
+        return null;
+      }
+      final estimate = RouteEstimate(
+        distanceMiles: passengerEstimate?.distanceMiles ?? 0,
+        durationMinutes:
+            navigationEstimate?.durationMinutes ??
+            passengerEstimate?.durationMinutes ??
+            0,
+        fareUsd: passengerEstimate?.fareUsd ?? 0,
+        path:
+            navigationEstimate?.path ??
+            passengerEstimate?.path ??
+            <LatLng>[from, to],
+      );
+      if (!mounted) return estimate;
+      setState(() {
+        _originPoint = from;
+        _destPoint = to;
+        _routeEstimate = estimate;
+      });
+      return estimate;
+    } catch (_) {
       if (mounted) {
-        setState(() => _quoteLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
               context.txt(
-                es: "No se pudo resolver la ruta",
-                en: "The route could not be resolved",
+                es: "La ruta tardo demasiado o fallo. Intenta otra vez.",
+                en: "The route timed out or failed. Please try again.",
               ),
             ),
           ),
         );
       }
       return null;
+    } finally {
+      if (mounted) {
+        setState(() => _quoteLoading = false);
+      }
     }
-
-    final estimate = await _mapService.calculateRoute(
-      origin: from,
-      destination: to,
-    );
-    if (!mounted) return estimate;
-    setState(() {
-      _originPoint = from;
-      _destPoint = to;
-      _routeEstimate = estimate;
-      _quoteLoading = false;
-    });
-    return estimate;
   }
 
   Future<void> _searchAddress({
@@ -454,6 +524,10 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
                     return;
                   }
                   setState(() => _selectedDriverId = driver.id);
+                  if (_originPoint != null && _destPoint != null) {
+                    setState(() => _routeEstimate = null);
+                    unawaited(_resolveRouteEstimate());
+                  }
                 },
               ),
             ),

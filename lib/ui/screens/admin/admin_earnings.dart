@@ -17,26 +17,36 @@ class AdminEarnings extends StatelessWidget {
     final drivers = context.watch<DriverProvider>().drivers;
     final trips = tripProvider.trips;
     final now = DateTime.now();
+    final startOfToday = DateTime(now.year, now.month, now.day);
     final weekStart = DateTime(
       now.year,
       now.month,
       now.day,
     ).subtract(Duration(days: now.weekday - 1));
-    final lastWeekStart = weekStart.subtract(const Duration(days: 7));
-    final lastWeekEnd = weekStart;
-
-    final thisWeekRevenue = trips
-        .where((trip) => trip.createdAt.isAfter(weekStart))
-        .fold<double>(0, (sum, trip) => sum + trip.fareUsd);
-    final lastWeekRevenue = trips
-        .where(
-          (trip) =>
-              trip.createdAt.isAfter(lastWeekStart) &&
-              trip.createdAt.isBefore(lastWeekEnd),
-        )
-        .fold<double>(0, (sum, trip) => sum + trip.fareUsd);
-    final activeTrips = tripProvider.totalActiveTrips();
-    final completedTrips = tripProvider.completedTrips();
+    final settledTrips = trips
+        .where((trip) => tripProvider.countsTowardConfirmedEarnings(trip))
+        .toList();
+    final pendingAdminBalance = settledTrips.fold<double>(
+      0,
+      (sum, trip) => sum + tripProvider.serviceFeeForTrip(trip),
+    );
+    final todayAdminFee = settledTrips
+        .where((trip) => !trip.createdAt.isBefore(startOfToday))
+        .fold<double>(
+          0,
+          (sum, trip) => sum + tripProvider.serviceFeeForTrip(trip),
+        );
+    final thisWeekAdminFee = settledTrips
+        .where((trip) => !trip.createdAt.isBefore(weekStart))
+        .fold<double>(
+          0,
+          (sum, trip) => sum + tripProvider.serviceFeeForTrip(trip),
+        );
+    final grossCollected = settledTrips.fold<double>(
+      0,
+      (sum, trip) => sum + trip.fareUsd,
+    );
+    final completedTrips = settledTrips.length;
     final connectedDrivers = drivers.where((driver) => driver.isOnline).length;
 
     return ListView(
@@ -45,38 +55,53 @@ class AdminEarnings extends StatelessWidget {
         _HeroCard(
           title: t(es: "Ganancias", en: "Earnings"),
           subtitle: t(
-            es: "Vista operativa de ingresos, flota y movimiento semanal.",
-            en: "Operational view of revenue, fleet, and weekly movement.",
+            es: "El admin liquida 25% por viaje y el driver conserva 75%.",
+            en: "Admin settles 25% per trip while the driver keeps 75%.",
           ),
         ),
         const SizedBox(height: 14),
         _MetricGrid(
           children: [
             _MetricCard(
-              label: t(es: "Balance actual", en: "Current balance"),
-              value: usd(tripProvider.confirmedRevenue()),
+              label: t(
+                es: "Balance pendiente admin",
+                en: "Admin pending balance",
+              ),
+              value: usd(pendingAdminBalance),
               note: context.isEnglish
-                  ? "$completedTrips completed trips"
-                  : "$completedTrips viajes finalizados",
+                  ? "25% of $completedTrips recorded trips"
+                  : "25% de $completedTrips viajes registrados",
+            ),
+            _MetricCard(
+              label: t(es: "Hoy", en: "Today"),
+              value: usd(todayAdminFee),
+              note: t(
+                es: "Comision generada hoy",
+                en: "Commission generated today",
+              ),
             ),
             _MetricCard(
               label: t(es: "Esta semana", en: "This week"),
-              value: usd(thisWeekRevenue),
-              note: t(es: "Actividad desde lunes", en: "Activity since Monday"),
+              value: usd(thisWeekAdminFee),
+              note: t(
+                es: "Service fee semanal",
+                en: "Weekly service fee",
+              ),
             ),
             _MetricCard(
-              label: t(es: "Semana pasada", en: "Last week"),
-              value: usd(lastWeekRevenue),
-              note: t(es: "Comparativo reciente", en: "Recent comparison"),
-            ),
-            _MetricCard(
-              label: t(es: "Flota online", en: "Fleet online"),
-              value: connectedDrivers.toString(),
+              label: t(es: "Service fee acumulado", en: "Accumulated service fee"),
+              value: usd(pendingAdminBalance),
               note: context.isEnglish
-                  ? "$activeTrips active routes"
-                  : "$activeTrips rutas activas",
+                  ? "Drivers collected ${usd(grossCollected)}"
+                  : "Drivers cobraron ${usd(grossCollected)}",
             ),
           ],
+        ),
+        const SizedBox(height: 12),
+        _EmptyCard(
+          text: context.isEnglish
+              ? "$connectedDrivers drivers online. Pending admin balance matches accumulated fee until weekly settlement is marked."
+              : "$connectedDrivers drivers online. El balance pendiente coincide con el service fee acumulado hasta registrar la liquidacion semanal.",
         ),
         const SizedBox(height: 16),
         Text(
@@ -84,7 +109,7 @@ class AdminEarnings extends StatelessWidget {
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 10),
-        if (trips.isEmpty)
+        if (settledTrips.isEmpty)
           _EmptyCard(
             text: t(
               es: "Aun no hay viajes para mostrar",
@@ -92,16 +117,16 @@ class AdminEarnings extends StatelessWidget {
             ),
           )
         else
-          ...trips
+          ...settledTrips
               .take(6)
               .map(
                 (trip) => Padding(
                   padding: const EdgeInsets.only(bottom: 10),
                   child: _TripFinanceLine(
                     title: "${trip.origin} -> ${trip.destination}",
-                    trailing: usd(trip.fareUsd),
+                    trailing: usd(tripProvider.serviceFeeForTrip(trip)),
                     subtitle:
-                        "${context.tripStatus(trip.status)} - ${milesText(trip.distanceMiles)}",
+                        "${context.tripStatus(trip.status)} - ${milesText(trip.distanceMiles)} • ${t(es: "Driver", en: "Driver")} ${usd(tripProvider.driverNetForTrip(trip))} • ${t(es: "Total", en: "Total")} ${usd(trip.fareUsd)}",
                   ),
                 ),
               ),

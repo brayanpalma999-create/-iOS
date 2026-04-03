@@ -11,8 +11,14 @@ class UserModel {
     required this.address,
     required this.governmentId,
     this.languageCode = "es",
+    this.mapThemeMode = "flow",
     this.isOnline = true,
     this.avatarPath,
+    this.vehicleMake,
+    this.vehicleModel,
+    this.vehicleColor,
+    this.vehiclePlate,
+    this.vehicleYear,
   });
 
   final String id;
@@ -24,8 +30,14 @@ class UserModel {
   final String address;
   final String governmentId;
   final String languageCode;
+  final String mapThemeMode;
   final bool isOnline;
   final String? avatarPath;
+  final String? vehicleMake;
+  final String? vehicleModel;
+  final String? vehicleColor;
+  final String? vehiclePlate;
+  final String? vehicleYear;
 
   Map<String, dynamic> toJson() => {
     "id": id,
@@ -37,8 +49,14 @@ class UserModel {
     "address": address,
     "governmentId": governmentId,
     "languageCode": languageCode,
+    "mapThemeMode": mapThemeMode,
     "isOnline": isOnline,
     "avatarPath": avatarPath,
+    "vehicleMake": vehicleMake,
+    "vehicleModel": vehicleModel,
+    "vehicleColor": vehicleColor,
+    "vehiclePlate": vehiclePlate,
+    "vehicleYear": vehicleYear,
   };
 
   UserModel copyWith({
@@ -51,8 +69,14 @@ class UserModel {
     String? address,
     String? governmentId,
     String? languageCode,
+    String? mapThemeMode,
     bool? isOnline,
     String? avatarPath,
+    String? vehicleMake,
+    String? vehicleModel,
+    String? vehicleColor,
+    String? vehiclePlate,
+    String? vehicleYear,
   }) {
     return UserModel(
       id: id ?? this.id,
@@ -64,8 +88,14 @@ class UserModel {
       address: address ?? this.address,
       governmentId: governmentId ?? this.governmentId,
       languageCode: languageCode ?? this.languageCode,
+      mapThemeMode: mapThemeMode ?? this.mapThemeMode,
       isOnline: isOnline ?? this.isOnline,
       avatarPath: avatarPath ?? this.avatarPath,
+      vehicleMake: vehicleMake ?? this.vehicleMake,
+      vehicleModel: vehicleModel ?? this.vehicleModel,
+      vehicleColor: vehicleColor ?? this.vehicleColor,
+      vehiclePlate: vehiclePlate ?? this.vehiclePlate,
+      vehicleYear: vehicleYear ?? this.vehicleYear,
     );
   }
 
@@ -83,8 +113,14 @@ class UserModel {
       address: json["address"]?.toString() ?? "",
       governmentId: json["governmentId"]?.toString() ?? "",
       languageCode: json["languageCode"]?.toString() ?? "es",
+      mapThemeMode: json["mapThemeMode"]?.toString() ?? "flow",
       isOnline: json["isOnline"] as bool? ?? true,
       avatarPath: json["avatarPath"]?.toString(),
+      vehicleMake: json["vehicleMake"]?.toString(),
+      vehicleModel: json["vehicleModel"]?.toString(),
+      vehicleColor: json["vehicleColor"]?.toString(),
+      vehiclePlate: json["vehiclePlate"]?.toString(),
+      vehicleYear: json["vehicleYear"]?.toString(),
     );
   }
 }

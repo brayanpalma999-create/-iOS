@@ -7,9 +7,11 @@ import "../../providers/auth_provider.dart";
 import "../../providers/chat_provider.dart";
 import "../../providers/driver_provider.dart";
 import "../../providers/intercom_provider.dart";
+import "../../providers/map_ui_provider.dart";
 import "../../providers/trip_provider.dart";
 import "../../routes.dart";
 import "../../utils/app_text.dart";
+import "../../utils/auth_security.dart";
 import "../../utils/constants.dart";
 import "../widgets/app_shell.dart";
 import "../widgets/atob_logo.dart";
@@ -49,8 +51,10 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _login() async {
-    final name = _nameCtrl.text.trim();
-    if (name.isEmpty) {
+    final typedIdentifier = _nameCtrl.text.trim();
+    final password = _passwordCtrl.text.trim();
+    if ((_role != UserRole.admin && typedIdentifier.isEmpty) ||
+        password.isEmpty) {
       return;
     }
     if (_role == UserRole.admin && !_adminVerified) {
@@ -73,8 +77,80 @@ class _LoginScreenState extends State<LoginScreen> {
     final chatProvider = context.read<ChatProvider>();
     final adminProvider = context.read<AdminProvider>();
     final driverProvider = context.read<DriverProvider>();
+    await auth.ensureLoaded();
+    if (!mounted) return;
+    final identifier = _role == UserRole.admin
+        ? AuthSecurity.fixedAdminEmail
+        : typedIdentifier;
+    DriverAccessProfile? driverAccess;
+    if (_role == UserRole.admin) {
+      final isValidAdmin = auth.authorizeAdminLogin(
+        email: identifier,
+        password: password,
+      );
+      if (!isValidAdmin) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              context.txt(
+                es: "Solo el acceso admin autorizado puede entrar con ese correo y contrasena",
+                en: "Only the authorized admin access can enter with that email and password",
+              ),
+            ),
+          ),
+        );
+        return;
+      }
+    } else {
+      if (!auth.hasAuthorizedDrivers) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              context.txt(
+                es: "Todavia no hay accesos activos para drivers. Crea uno desde el panel de admin.",
+                en: "There are no active driver accesses yet. Create one from the admin panel.",
+              ),
+            ),
+          ),
+        );
+        return;
+      }
+      driverAccess = await auth.authorizeDriverLogin(
+        email: identifier,
+        password: password,
+      );
+      if (driverAccess == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              context.txt(
+                es: "Este driver no tiene acceso activo o el codigo no coincide",
+                en: "This driver does not have active access or the code does not match",
+              ),
+            ),
+          ),
+        );
+        return;
+      }
+    }
+    await auth.warmAccountProfile(
+      role: _role,
+      loginIdentifier: identifier,
+      email: driverAccess?.email,
+    );
+    if (!mounted) return;
     tripProvider.clearAll();
-    auth.login(name: name, role: _role, password: _passwordCtrl.text.trim());
+    auth.login(
+      name: driverAccess?.displayName ?? identifier,
+      role: _role,
+      password: password,
+      driverAccess: driverAccess,
+      loginIdentifier: identifier,
+    );
+    context.read<MapUiProvider>().setThemeModeFromName(
+      auth.user?.mapThemeMode ?? "flow",
+    );
 
     final user = auth.user!;
     chatProvider.setIdentity(
@@ -93,7 +169,22 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       Navigator.of(context).pushReplacementNamed(AppRoutes.adminHome);
     } else {
-      await driverProvider.connectDriver(id: user.id, name: user.name);
+      await driverProvider.connectDriver(
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        address: user.address,
+        governmentId: user.governmentId,
+        avatarPath: user.avatarPath,
+        languageCode: user.languageCode,
+        mapThemeMode: user.mapThemeMode,
+        vehicleMake: user.vehicleMake,
+        vehicleModel: user.vehicleModel,
+        vehicleColor: user.vehicleColor,
+        vehiclePlate: user.vehiclePlate,
+        vehicleYear: user.vehicleYear,
+      );
       final resolvedId = driverProvider.self?.id ?? user.id;
       chatProvider.setIdentity(
         userId: resolvedId,
@@ -116,6 +207,7 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     String t({required String es, required String en}) =>
         context.txt(es: es, en: en);
+    final auth = context.watch<AuthProvider>();
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
 
     return Scaffold(
@@ -225,8 +317,18 @@ class _LoginScreenState extends State<LoginScreen> {
                               const SizedBox(height: 14),
                               CustomInput(
                                 controller: _nameCtrl,
-                                hint: t(es: "Nombre", en: "Name"),
-                                prefixIcon: Icons.person_outline_rounded,
+                                hint: _role == UserRole.admin
+                                    ? t(
+                                        es: "Correo admin",
+                                        en: "Admin email",
+                                      )
+                                    : t(
+                                        es: "Correo del driver",
+                                        en: "Driver email",
+                                      ),
+                                prefixIcon: _role == UserRole.admin
+                                    ? Icons.person_outline_rounded
+                                    : Icons.alternate_email_rounded,
                               ),
                               const SizedBox(height: 10),
                               CustomInput(
@@ -324,6 +426,40 @@ class _LoginScreenState extends State<LoginScreen> {
                                         ),
                                       ),
                                     ],
+                                  ),
+                                ),
+                              ],
+                              if (_role == UserRole.driver) ...[
+                                const SizedBox(height: 10),
+                                Text(
+                                  auth.hasAuthorizedDrivers
+                                      ? t(
+                                          es: "El acceso driver es privado y solo entra con invitacion activa por correo y contrasena.",
+                                          en: "Driver access is private and only works with an active email invitation and password.",
+                                        )
+                                      : t(
+                                          es: "Aun no hay accesos para drivers. Primero crea la invitacion desde el panel de admin.",
+                                          en: "There are no driver accesses yet. First create the invitation from the admin panel.",
+                                        ),
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w600,
+                                    height: 1.35,
+                                  ),
+                                ),
+                              ] else ...[
+                                const SizedBox(height: 10),
+                                Text(
+                                  t(
+                                    es: "Acceso admin privado y permanente.",
+                                    en: "Private permanent admin access.",
+                                  ),
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w600,
+                                    height: 1.35,
                                   ),
                                 ),
                               ],

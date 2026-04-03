@@ -5,7 +5,7 @@ class AppConstants {
 
   static const socketUrl = String.fromEnvironment(
     "SOCKET_URL",
-    defaultValue: "https://atob-server.onrender.com",
+    defaultValue: "https://atob-server-1.onrender.com",
   );
   static const socketPath = String.fromEnvironment(
     "SOCKET_PATH",

@@ -6,6 +6,7 @@ import "package:image_picker/image_picker.dart";
 
 import "../models/chat_message_model.dart";
 import "../services/socket_service.dart";
+import "../utils/helpers.dart";
 import "driver_provider.dart";
 
 class ChatProvider extends ChangeNotifier {
@@ -254,10 +255,12 @@ class ChatProvider extends ChangeNotifier {
   }
 
   String get _effectiveSelfName {
-    if (selfIsAdmin) return _selfName;
+    if (selfIsAdmin) return compactPersonName(_selfName);
     final driverName = _driverProvider.self?.name.trim();
-    if (driverName != null && driverName.isNotEmpty) return driverName;
-    return _selfName;
+    if (driverName != null && driverName.isNotEmpty) {
+      return compactPersonName(driverName);
+    }
+    return compactPersonName(_selfName);
   }
 
   String _mimeForPath(XFile file) {

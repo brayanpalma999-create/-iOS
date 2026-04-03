@@ -10,6 +10,7 @@ import "../../../services/location_service.dart";
 import "../../../services/map_service.dart";
 import "../../../utils/app_text.dart";
 import "../../../utils/constants.dart";
+import "../../../utils/helpers.dart";
 import "../../widgets/map_marker.dart";
 
 class AdminMap extends StatefulWidget {
@@ -20,6 +21,15 @@ class AdminMap extends StatefulWidget {
 }
 
 class _AdminMapState extends State<AdminMap> {
+  static const List<Color> _routePalette = <Color>[
+    Color(0xFFFFB84D),
+    Color(0xFF54A9FF),
+    Color(0xFFFF6E97),
+    Color(0xFF53E3D6),
+    Color(0xFFC08BFF),
+    Color(0xFFFF7A52),
+  ];
+
   final MapController _mapController = MapController();
   final Distance _distance = const Distance();
   bool _followFleet = true;
@@ -30,6 +40,7 @@ class _AdminMapState extends State<AdminMap> {
   int _tileErrorBurst = 0;
   bool _seededViewerLocation = false;
   LatLng? _viewerLocation;
+  bool _routesExpanded = false;
 
   @override
   void didChangeDependencies() {
@@ -67,26 +78,38 @@ class _AdminMapState extends State<AdminMap> {
     }
   }
 
-  TileLayer _baseLayer(MapThemeMode mode) {
+  List<Widget> _baseLayers(MapThemeMode mode) {
     final mapboxEnabled = AppConstants.hasMapboxToken && !_forceStableTiles;
-    final url = mapboxEnabled
+    final mapboxUrl = mapboxEnabled
         ? switch (mode) {
             MapThemeMode.flow => AppConstants.tileModernUrl,
             MapThemeMode.dark => AppConstants.tileNightUrl,
             MapThemeMode.satellite => AppConstants.tileSatelliteUrl,
           }
-        : AppConstants.tileFallbackUrl;
-    return TileLayer(
-      urlTemplate: url,
-      fallbackUrl: AppConstants.tileFallbackBackupUrl,
-      retinaMode: false,
-      errorTileCallback: (_, error, stackTrace) => _onTileError(error),
-      evictErrorTileStrategy: EvictErrorTileStrategy.notVisibleRespectMargin,
-      userAgentPackageName: "com.example.atob_app",
-      keepBuffer: 1,
-      panBuffer: 0,
-      maxNativeZoom: 19,
-    );
+        : null;
+    return [
+      TileLayer(
+        urlTemplate: AppConstants.tileFallbackUrl,
+        fallbackUrl: AppConstants.tileFallbackBackupUrl,
+        retinaMode: false,
+        userAgentPackageName: "com.example.atob_app",
+        keepBuffer: 1,
+        panBuffer: 0,
+        maxNativeZoom: 19,
+      ),
+      if (mapboxUrl != null)
+        TileLayer(
+          urlTemplate: mapboxUrl,
+          fallbackUrl: AppConstants.tileFallbackBackupUrl,
+          retinaMode: false,
+          errorTileCallback: (_, error, stackTrace) => _onTileError(error),
+          evictErrorTileStrategy: EvictErrorTileStrategy.notVisibleRespectMargin,
+          userAgentPackageName: "com.example.atob_app",
+          keepBuffer: 1,
+          panBuffer: 0,
+          maxNativeZoom: 19,
+        ),
+    ];
   }
 
   void _moveTo(LatLng point) {
@@ -164,14 +187,39 @@ class _AdminMapState extends State<AdminMap> {
     final zoom = renderableDrivers.isEmpty
         ? (_viewerLocation == null ? 4.4 : 14.8)
         : mapService.dynamicZoom(renderableDrivers.length);
-    final activeTripRoutes = trips
-        .where((trip) => trip.status == "assigned" || trip.status == "accepted")
-        .map(
-          (trip) => trip.routePoints
+    final driverNames = <String, String>{
+      for (final driver in allDrivers) driver.id: driver.name,
+      for (final driver in allDrivers)
+        if ((driver.intercomId ?? "").trim().isNotEmpty)
+          driver.intercomId!.trim(): driver.name,
+    };
+    final activeTripRoutes = trips.asMap().entries
+        .map((entry) {
+          final trip = entry.value;
+          if (trip.status != "assigned" &&
+              trip.status != "accepted" &&
+              trip.status != "picked_up") {
+            return null;
+          }
+          final path = trip.routePoints
               .map((p) => LatLng(p.latitude, p.longitude))
-              .toList(),
-        )
-        .where((path) => path.length > 1)
+              .toList();
+          if (path.length <= 1) return null;
+          final color = _routePalette[entry.key % _routePalette.length];
+          final rawDriverName = driverNames[trip.driverId];
+          final fallbackDriverName =
+              "${t(es: "Driver", en: "Driver")} #${trip.driverId.length <= 4 ? trip.driverId : trip.driverId.substring(trip.driverId.length - 4)}";
+          final driverName = compactPersonName(
+            rawDriverName ?? fallbackDriverName,
+          );
+          return _RouteOverlay(
+            tripId: trip.id,
+            driverName: driverName,
+            color: color,
+            path: path,
+          );
+        })
+        .whereType<_RouteOverlay>()
         .toList();
 
     final mustMove =
@@ -203,7 +251,7 @@ class _AdminMapState extends State<AdminMap> {
                 },
               ),
               children: [
-                _baseLayer(mapTheme),
+                ..._baseLayers(mapTheme),
                 if (hotspots.isNotEmpty)
                   CircleLayer(
                     circles: hotspots
@@ -221,12 +269,19 @@ class _AdminMapState extends State<AdminMap> {
                 if (activeTripRoutes.isNotEmpty)
                   PolylineLayer(
                     polylines: activeTripRoutes
-                        .map(
-                          (path) => Polyline(
-                            points: path,
-                            strokeWidth: 4,
-                            color: AppConstants.accent.withValues(alpha: 0.84),
-                          ),
+                        .expand(
+                          (route) => <Polyline>[
+                            Polyline(
+                              points: route.path,
+                              strokeWidth: 7.2,
+                              color: const Color(0xB0000000),
+                            ),
+                            Polyline(
+                              points: route.path,
+                              strokeWidth: 4.8,
+                              color: route.color.withValues(alpha: 0.96),
+                            ),
+                          ],
                         )
                         .toList(),
                   ),
@@ -238,10 +293,10 @@ class _AdminMapState extends State<AdminMap> {
                             d.location.latitude,
                             d.location.longitude,
                           ),
-                          width: 122,
-                          height: 82,
+                          width: 96,
+                          height: 68,
                           child: MapMarker(
-                            label: d.name,
+                            label: compactPersonName(d.name),
                             active: d.isOnline,
                             carMode: true,
                           ),
@@ -274,6 +329,18 @@ class _AdminMapState extends State<AdminMap> {
                   ),
                 ),
               ),
+            if (activeTripRoutes.isNotEmpty)
+              Positioned(
+                left: 10,
+                top: _forceStableTiles ? 86 : 48,
+                child: _RouteLegend(
+                  routes: activeTripRoutes,
+                  isEnglish: context.isEnglish,
+                  expanded: _routesExpanded,
+                  onToggle: () =>
+                      setState(() => _routesExpanded = !_routesExpanded),
+                ),
+              ),
             Positioned(
               left: 16,
               right: 16,
@@ -289,12 +356,6 @@ class _AdminMapState extends State<AdminMap> {
               right: 10,
               top: 96,
               child: _MapActions(
-                followEnabled: _followFleet,
-                onFollowTap: () => setState(() => _followFleet = !_followFleet),
-                onCenterTap: () {
-                  _moveTo(center);
-                  setState(() => _followFleet = true);
-                },
                 onZoomIn: () {
                   _zoom = (_zoom + 1).clamp(3, 19);
                   _mapController.move(_mapController.camera.center, _zoom);
@@ -319,18 +380,26 @@ class _Hotspot {
   final int strength;
 }
 
+class _RouteOverlay {
+  const _RouteOverlay({
+    required this.tripId,
+    required this.driverName,
+    required this.color,
+    required this.path,
+  });
+
+  final String tripId;
+  final String driverName;
+  final Color color;
+  final List<LatLng> path;
+}
+
 class _MapActions extends StatelessWidget {
   const _MapActions({
-    required this.followEnabled,
-    required this.onFollowTap,
-    required this.onCenterTap,
     required this.onZoomIn,
     required this.onZoomOut,
   });
 
-  final bool followEnabled;
-  final VoidCallback onFollowTap;
-  final VoidCallback onCenterTap;
   final VoidCallback onZoomIn;
   final VoidCallback onZoomOut;
 
@@ -338,15 +407,6 @@ class _MapActions extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        _CircleAction(
-          icon: followEnabled
-              ? Icons.near_me_rounded
-              : Icons.near_me_disabled_rounded,
-          onTap: onFollowTap,
-        ),
-        const SizedBox(height: 8),
-        _CircleAction(icon: Icons.my_location_rounded, onTap: onCenterTap),
-        const SizedBox(height: 8),
         _CircleAction(icon: Icons.add_rounded, onTap: onZoomIn),
         const SizedBox(height: 8),
         _CircleAction(icon: Icons.remove_rounded, onTap: onZoomOut),
@@ -394,6 +454,122 @@ class _StatChip extends StatelessWidget {
         border: Border.all(color: const Color(0x30FFFFFF)),
       ),
       child: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+    );
+  }
+}
+
+class _RouteLegend extends StatelessWidget {
+  const _RouteLegend({
+    required this.routes,
+    required this.isEnglish,
+    required this.expanded,
+    required this.onToggle,
+  });
+
+  final List<_RouteOverlay> routes;
+  final bool isEnglish;
+  final bool expanded;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 220,
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: const Color(0xDE0F1113),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0x28FFFFFF)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: onToggle,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    isEnglish ? "Live routes" : "Rutas activas",
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+                Text(
+                  "${routes.length}",
+                  style: const TextStyle(
+                    color: Colors.white54,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Icon(
+                  expanded
+                      ? Icons.keyboard_arrow_up_rounded
+                      : Icons.keyboard_arrow_down_rounded,
+                  size: 18,
+                  color: Colors.white70,
+                ),
+              ],
+            ),
+          ),
+          if (expanded) ...[
+            const SizedBox(height: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 184),
+              child: Scrollbar(
+                thumbVisibility: routes.length > 5,
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: routes.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 6),
+                  itemBuilder: (context, index) {
+                    final route = routes[index];
+                    return Row(
+                      children: [
+                        Container(
+                          width: 9,
+                          height: 9,
+                          decoration: BoxDecoration(
+                            color: route.color,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            route.driverName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 11.6,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ),
+          ] else ...[
+            const SizedBox(height: 6),
+            Text(
+              isEnglish
+                  ? "Tap to view active drivers"
+                  : "Toca para ver los drivers activos",
+              style: const TextStyle(
+                color: Colors.white54,
+                fontSize: 11.8,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

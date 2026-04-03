@@ -14,6 +14,7 @@ class TripCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = switch (trip.status) {
       "accepted" => AppConstants.accent,
+      "picked_up" => const Color(0xFFFFC857),
       "completed" => const Color(0xFF6EA8FF),
       "rejected" => Colors.redAccent,
       "assigned" => Colors.orangeAccent,

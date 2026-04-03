@@ -23,24 +23,39 @@ class DriverEarnings extends StatelessWidget {
               .toList();
 
     final now = DateTime.now();
+    final startOfToday = DateTime(now.year, now.month, now.day);
     final weekStart = DateTime(
       now.year,
       now.month,
       now.day,
     ).subtract(Duration(days: now.weekday - 1));
-    final lastWeekStart = weekStart.subtract(const Duration(days: 7));
-    final lastWeekEnd = weekStart;
-    final currentBalance = tripProvider.confirmedRevenue(driverId: driverId);
-    final thisWeek = trips
-        .where((trip) => trip.createdAt.isAfter(weekStart))
-        .fold<double>(0, (sum, trip) => sum + trip.fareUsd);
-    final lastWeek = trips
-        .where(
-          (trip) =>
-              trip.createdAt.isAfter(lastWeekStart) &&
-              trip.createdAt.isBefore(lastWeekEnd),
-        )
-        .fold<double>(0, (sum, trip) => sum + trip.fareUsd);
+    final settledTrips = trips
+        .where((trip) => tripProvider.countsTowardConfirmedEarnings(trip))
+        .toList();
+    final currentBalance = tripProvider.driverNetRevenue(
+      driverId: driverId,
+      confirmedOnly: true,
+    );
+    final todayDriverNet = settledTrips
+        .where((trip) => !trip.createdAt.isBefore(startOfToday))
+        .fold<double>(
+          0,
+          (sum, trip) => sum + tripProvider.driverNetForTrip(trip),
+        );
+    final thisWeek = settledTrips
+        .where((trip) => !trip.createdAt.isBefore(weekStart))
+        .fold<double>(
+          0,
+          (sum, trip) => sum + tripProvider.driverNetForTrip(trip),
+        );
+    final totalDriverNet = settledTrips.fold<double>(
+      0,
+      (sum, trip) => sum + tripProvider.driverNetForTrip(trip),
+    );
+    final pendingAdminFee = settledTrips.fold<double>(
+      0,
+      (sum, trip) => sum + tripProvider.serviceFeeForTrip(trip),
+    );
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -87,8 +102,8 @@ class DriverEarnings extends StatelessWidget {
                         en: "Connect the account to start registering trips.",
                       )
                     : t(
-                        es: "Balance estimado para operacion en efectivo.",
-                        en: "Estimated balance for cash operation.",
+                        es: "Tu 75% queda aqui. El 25% restante se registra para el admin.",
+                        en: "Your 75% stays here. The remaining 25% is tracked for admin.",
                       ),
                 style: const TextStyle(color: Colors.white70, height: 1.35),
               ),
@@ -101,27 +116,28 @@ class DriverEarnings extends StatelessWidget {
           runSpacing: 12,
           children: [
             _MiniCard(
-              title: t(es: "Esta semana", en: "This week"),
-              value: usd(thisWeek),
+              title: t(es: "Hoy", en: "Today"),
+              value: usd(todayDriverNet),
               subtitle: context.isEnglish
                   ? "${tripProvider.completedTrips(driverId: driverId)} trips"
                   : "${tripProvider.completedTrips(driverId: driverId)} viajes",
             ),
             _MiniCard(
-              title: t(es: "Semana pasada", en: "Last week"),
-              value: usd(lastWeek),
-              subtitle: t(es: "Comparativo", en: "Comparison"),
+              title: t(es: "Esta semana", en: "This week"),
+              value: usd(thisWeek),
+              subtitle: t(es: "Ganancia neta", en: "Net earnings"),
             ),
             _MiniCard(
-              title: t(es: "Aceptacion", en: "Acceptance"),
-              value: percent(tripProvider.acceptanceRate(driverId: driverId)),
-              subtitle: t(es: "Rendimiento actual", en: "Current performance"),
+              title: t(es: "Total acumulado", en: "Lifetime total"),
+              value: usd(totalDriverNet),
+              subtitle: t(es: "75% del valor total", en: "75% of total fare"),
             ),
             _MiniCard(
-              title: t(es: "Promedio por viaje", en: "Avg trip"),
-              value: usd(tripProvider.averageFare(driverId: driverId)),
-              subtitle: milesText(
-                tripProvider.averageDistanceMiles(driverId: driverId),
+              title: t(es: "Pendiente admin", en: "Admin pending"),
+              value: usd(pendingAdminFee),
+              subtitle: t(
+                es: "25% acumulado por liquidar",
+                en: "Accumulated 25% to settle",
               ),
             ),
           ],
@@ -132,7 +148,7 @@ class DriverEarnings extends StatelessWidget {
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 10),
-        if (trips.isEmpty)
+        if (settledTrips.isEmpty)
           _EmptyBlock(
             text: t(
               es: "Todavia no hay movimientos en ganancias",
@@ -140,7 +156,7 @@ class DriverEarnings extends StatelessWidget {
             ),
           )
         else
-          ...trips
+          ...settledTrips
               .take(6)
               .map(
                 (trip) => Padding(
@@ -203,6 +219,7 @@ class _TripMovement extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tripProvider = context.read<TripProvider>();
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -227,14 +244,14 @@ class _TripMovement extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  trip.destination,
+                  "${trip.origin} -> ${trip.destination}",
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  "${context.tripStatus(trip.status)} - ${milesText(trip.distanceMiles)}",
+                  "${context.tripStatus(trip.status)} - ${milesText(trip.distanceMiles)} • Admin ${usd(tripProvider.serviceFeeForTrip(trip))} • Total ${usd(trip.fareUsd)}",
                   style: const TextStyle(color: Colors.white70, fontSize: 12.5),
                 ),
               ],
@@ -242,7 +259,7 @@ class _TripMovement extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           Text(
-            usd(trip.fareUsd),
+            usd(tripProvider.driverNetForTrip(trip)),
             style: const TextStyle(
               color: Color(0xFF8DF5C6),
               fontWeight: FontWeight.w900,

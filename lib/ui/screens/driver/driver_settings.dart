@@ -537,26 +537,45 @@ class _HeaderCard extends StatelessWidget {
                 Text(
                   name,
                   style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w900,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                    height: 1.1,
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 4),
-                Text(subtitle, style: const TextStyle(color: Colors.white70)),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12.4,
+                    height: 1.1,
+                  ),
+                ),
               ],
             ),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: const Color(0x1A3DDC97),
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Text(
-              badge,
-              style: const TextStyle(
-                fontWeight: FontWeight.w800,
-                color: Color(0xFF8DF5C6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 118),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0x1A3DDC97),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                badge,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF8DF5C6),
+                  fontSize: 11.5,
+                ),
               ),
             ),
           ),

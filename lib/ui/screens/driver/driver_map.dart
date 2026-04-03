@@ -1,4 +1,8 @@
+import "dart:async";
+import "dart:math";
+
 import "package:flutter/material.dart";
+import "package:flutter_compass/flutter_compass.dart";
 import "package:flutter_map/flutter_map.dart";
 import "package:latlong2/latlong.dart";
 import "package:provider/provider.dart";
@@ -9,6 +13,7 @@ import "../../../providers/trip_provider.dart";
 import "../../../services/location_service.dart";
 import "../../../utils/app_text.dart";
 import "../../../utils/constants.dart";
+import "../../../utils/helpers.dart";
 import "../../widgets/map_marker.dart";
 
 class DriverMap extends StatefulWidget {
@@ -29,6 +34,21 @@ class _DriverMapState extends State<DriverMap> {
   int _tileErrorBurst = 0;
   bool _seededViewerLocation = false;
   LatLng? _viewerLocation;
+  String? _lastRouteFocusKey;
+  bool _hasActiveNavigation = false;
+  StreamSubscription<CompassEvent>? _compassSubscription;
+  double? _deviceHeading;
+  double? _lastAppliedRotation;
+
+  @override
+  void initState() {
+    super.initState();
+    _compassSubscription = FlutterCompass.events?.listen((event) {
+      final heading = event.heading;
+      if (heading == null || !mounted) return;
+      setState(() => _deviceHeading = heading);
+    });
+  }
 
   @override
   void didChangeDependencies() {
@@ -51,13 +71,55 @@ class _DriverMapState extends State<DriverMap> {
     }
   }
 
-  void _centerOn(LatLng point) {
-    _mapController.move(point, _zoom);
+  void _centerOn(LatLng point, {double? zoomOverride}) {
+    _centerOnWithRotation(point, zoomOverride: zoomOverride);
+  }
+
+  void _centerOnWithRotation(
+    LatLng point, {
+    double? zoomOverride,
+    double? rotationOverride,
+  }) {
+    if (zoomOverride != null) {
+      _zoom = zoomOverride;
+    }
+    if (rotationOverride != null) {
+      _mapController.moveAndRotate(point, _zoom, rotationOverride);
+      _lastAppliedRotation = rotationOverride;
+    } else {
+      _mapController.move(point, _zoom);
+    }
     _lastAutoCenter = point;
   }
 
+  void _fitRoute(List<LatLng> path, LatLng currentPoint) {
+    final points = <LatLng>[currentPoint, ...path];
+    if (points.length < 2) {
+      _centerOn(currentPoint);
+      return;
+    }
+    _mapController.fitCamera(
+      CameraFit.bounds(
+        bounds: LatLngBounds.fromPoints(points),
+        padding: const EdgeInsets.fromLTRB(56, 76, 56, 140),
+      ),
+    );
+    _lastAutoCenter = currentPoint;
+  }
+
+  void _focusNavigation(List<LatLng> path, LatLng currentPoint) {
+    final focus = _navigationFocusPoint(path, currentPoint);
+    _centerOnWithRotation(
+      focus,
+      zoomOverride: _zoom < 18.15 ? 18.15 : _zoom,
+      rotationOverride: _mapRotationForHeading(_deviceHeading),
+    );
+  }
+
   void _onTileError(Object error) {
-    if (!AppConstants.hasMapboxToken || _forceStableTiles) return;
+    if (!AppConstants.hasMapboxToken || _forceStableTiles || _hasActiveNavigation) {
+      return;
+    }
     final now = DateTime.now();
     final last = _lastTileErrorAt;
     if (last != null && now.difference(last) <= const Duration(seconds: 4)) {
@@ -71,26 +133,42 @@ class _DriverMapState extends State<DriverMap> {
     }
   }
 
-  TileLayer _baseLayer(MapThemeMode mode) {
-    final mapboxEnabled = AppConstants.hasMapboxToken && !_forceStableTiles;
-    final url = mapboxEnabled
+  List<Widget> _baseLayers(MapThemeMode mode) {
+    final mapboxEnabled =
+        AppConstants.hasMapboxToken && (!_forceStableTiles || _hasActiveNavigation);
+    final mapboxUrl = mapboxEnabled
         ? switch (mode) {
             MapThemeMode.flow => AppConstants.tileModernUrl,
             MapThemeMode.dark => AppConstants.tileNightUrl,
             MapThemeMode.satellite => AppConstants.tileSatelliteUrl,
           }
-        : AppConstants.tileFallbackUrl;
-    return TileLayer(
-      urlTemplate: url,
-      fallbackUrl: AppConstants.tileFallbackBackupUrl,
-      retinaMode: false,
-      errorTileCallback: (_, error, stackTrace) => _onTileError(error),
-      evictErrorTileStrategy: EvictErrorTileStrategy.notVisibleRespectMargin,
-      userAgentPackageName: "com.example.atob_app",
-      keepBuffer: 1,
-      panBuffer: 0,
-      maxNativeZoom: 19,
-    );
+        : null;
+    if (mapboxUrl != null) {
+      return [
+        TileLayer(
+          urlTemplate: mapboxUrl,
+          fallbackUrl: AppConstants.tileFallbackBackupUrl,
+          retinaMode: false,
+          errorTileCallback: (_, error, stackTrace) => _onTileError(error),
+          evictErrorTileStrategy: EvictErrorTileStrategy.notVisibleRespectMargin,
+          userAgentPackageName: "com.example.atob_app",
+          keepBuffer: 1,
+          panBuffer: 0,
+          maxNativeZoom: 19,
+        ),
+      ];
+    }
+    return [
+      TileLayer(
+        urlTemplate: AppConstants.tileFallbackUrl,
+        fallbackUrl: AppConstants.tileFallbackBackupUrl,
+        retinaMode: false,
+        userAgentPackageName: "com.example.atob_app",
+        keepBuffer: 1,
+        panBuffer: 0,
+        maxNativeZoom: 19,
+      ),
+    ];
   }
 
   bool _shouldRecenter(LatLng point) {
@@ -98,6 +176,57 @@ class _DriverMapState extends State<DriverMap> {
     if (current == null) return true;
     final meters = _distance.as(LengthUnit.Meter, current, point);
     return meters > 20;
+  }
+
+  LatLng _navigationFocusPoint(List<LatLng> path, LatLng currentPoint) {
+    if (path.isEmpty) return currentPoint;
+    var nearestIndex = 0;
+    var nearestMeters = double.infinity;
+    for (var i = 0; i < path.length; i++) {
+      final meters = _distance.as(LengthUnit.Meter, currentPoint, path[i]);
+      if (meters < nearestMeters) {
+        nearestMeters = meters;
+        nearestIndex = i;
+      }
+    }
+    final aheadIndex = min(path.length - 1, nearestIndex + 4);
+    final ahead = path[aheadIndex];
+    return LatLng(
+      (currentPoint.latitude * 0.58) + (ahead.latitude * 0.42),
+      (currentPoint.longitude * 0.58) + (ahead.longitude * 0.42),
+    );
+  }
+
+  List<LatLng> _remainingRoute(List<LatLng> path, LatLng currentPoint) {
+    if (path.length < 2) return path;
+    var nearestIndex = 0;
+    var nearestMeters = double.infinity;
+    for (var i = 0; i < path.length; i++) {
+      final meters = _distance.as(LengthUnit.Meter, currentPoint, path[i]);
+      if (meters < nearestMeters) {
+        nearestMeters = meters;
+        nearestIndex = i;
+      }
+    }
+    final remaining = <LatLng>[currentPoint, ...path.skip(nearestIndex)];
+    return _dedupeRoutePoints(remaining);
+  }
+
+  List<LatLng> _dedupeRoutePoints(List<LatLng> points) {
+    final compacted = <LatLng>[];
+    for (final point in points) {
+      if (compacted.isEmpty) {
+        compacted.add(point);
+        continue;
+      }
+      final last = compacted.last;
+      if ((last.latitude - point.latitude).abs() < 0.000005 &&
+          (last.longitude - point.longitude).abs() < 0.000005) {
+        continue;
+      }
+      compacted.add(point);
+    }
+    return compacted;
   }
 
   bool _hasUsableLocation(LatLng point) {
@@ -113,6 +242,110 @@ class _DriverMapState extends State<DriverMap> {
     return raw;
   }
 
+  double _speedMph(double metersPerSecond) {
+    return metersPerSecond <= 0 ? 0 : metersPerSecond * 2.236936;
+  }
+
+  double _headingDegrees(List<LatLng> breadcrumb, List<LatLng> routePath) {
+    if (breadcrumb.length >= 2) {
+      final previous = breadcrumb[breadcrumb.length - 2];
+      final current = breadcrumb.last;
+      final deltaLat = current.latitude - previous.latitude;
+      final deltaLng = current.longitude - previous.longitude;
+      if (deltaLat.abs() > 0.000001 || deltaLng.abs() > 0.000001) {
+        return _bearingBetween(previous, current);
+      }
+    }
+    if (routePath.length >= 2) {
+      return _bearingBetween(routePath.first, routePath[1]);
+    }
+    return 0;
+  }
+
+  double _bearingBetween(LatLng from, LatLng to) {
+    final deltaLng = (to.longitude - from.longitude);
+    final deltaLat = (to.latitude - from.latitude);
+    return (90 - (atan2(deltaLat, deltaLng) * 180 / pi) + 360) % 360;
+  }
+
+  double? _mapRotationForHeading(double? heading) {
+    if (heading == null || heading.isNaN) return null;
+    return (360 - heading) % 360;
+  }
+
+  void _syncNavigationRotation(bool hasStartedTrip) {
+    final rotation = _mapRotationForHeading(_deviceHeading);
+    if (!_followMe || !hasStartedTrip || rotation == null) {
+      if ((_lastAppliedRotation ?? 0).abs() > 0.8) {
+        _lastAppliedRotation = 0;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _mapController.rotate(0);
+        });
+      }
+      return;
+    }
+    final last = _lastAppliedRotation;
+    if (last != null && (last - rotation).abs() < 1.8) {
+      return;
+    }
+    _lastAppliedRotation = rotation;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _mapController.rotate(rotation);
+    });
+  }
+
+  String _compassLabel(
+    String Function({required String es, required String en}) t,
+  ) {
+    final heading = _deviceHeading;
+    if (heading == null) {
+      return t(es: "Brujula", en: "Compass");
+    }
+    const labels = ["N", "NE", "E", "SE", "S", "SO", "O", "NO"];
+    final index = (((heading + 22.5) % 360) / 45).floor();
+    return "${labels[index]} ${heading.round()}°";
+  }
+
+  int? _estimateMinutesToTarget(
+    List<LatLng> routePath,
+    LatLng target,
+    double totalMinutes,
+  ) {
+    if (routePath.length < 2 || totalMinutes <= 0) return null;
+    var targetIndex = 0;
+    var closestMeters = double.infinity;
+    for (var i = 0; i < routePath.length; i++) {
+      final meters = _distance.as(LengthUnit.Meter, routePath[i], target);
+      if (meters < closestMeters) {
+        closestMeters = meters;
+        targetIndex = i;
+      }
+    }
+    final totalMeters = _polylineMeters(routePath);
+    if (totalMeters <= 1) return totalMinutes.round();
+    final segmentMeters =
+        _polylineMeters(routePath.take(targetIndex + 1).toList());
+    final ratio = (segmentMeters / totalMeters).clamp(0.05, 1.0);
+    return max(1, (totalMinutes * ratio).round());
+  }
+
+  double _polylineMeters(List<LatLng> points) {
+    if (points.length < 2) return 0;
+    var meters = 0.0;
+    for (var i = 1; i < points.length; i++) {
+      meters += _distance.as(LengthUnit.Meter, points[i - 1], points[i]);
+    }
+    return meters;
+  }
+
+  @override
+  void dispose() {
+    _compassSubscription?.cancel();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     String t({required String es, required String en}) =>
@@ -124,6 +357,12 @@ class _DriverMapState extends State<DriverMap> {
     final activeTrip = self == null || self.currentTripId == null
         ? null
         : tripProvider.byId(self.currentTripId!);
+    final breadcrumb = self == null
+        ? const <LatLng>[]
+        : driverProvider
+            .pathForDriver(self.id)
+            .map((p) => LatLng(p.latitude, p.longitude))
+            .toList();
     final isVisible = (self?.status ?? "").toLowerCase().startsWith(
       "disponible",
     );
@@ -136,20 +375,76 @@ class _DriverMapState extends State<DriverMap> {
         ? selfPoint
         : (_viewerLocation ?? const LatLng(37.0902, -95.7129));
     final hasStartedTrip =
-        activeTrip != null && activeTrip.status == "accepted";
-    final routePath = !hasStartedTrip
+        activeTrip != null &&
+        (activeTrip.status == "accepted" || activeTrip.status == "picked_up");
+    _hasActiveNavigation = hasStartedTrip;
+    final fullRoutePath = !hasStartedTrip
         ? <LatLng>[]
         : activeTrip.routePoints
               .map((p) => LatLng(p.latitude, p.longitude))
               .toList();
+    final routePath = fullRoutePath.length > 1
+        ? _remainingRoute(fullRoutePath, point)
+        : fullRoutePath;
+    final routeFocusPoint = hasStartedTrip && routePath.length > 1
+        ? _navigationFocusPoint(routePath, point)
+        : point;
+    final routeFocusKey = activeTrip == null
+        ? null
+        : "${activeTrip.id}:${activeTrip.status}:${routePath.length}";
+    final heading = _headingDegrees(breadcrumb, routePath);
+    final speedMph = _speedMph(self?.location.speed ?? 0);
+    final pickupPoint = activeTrip?.originLocation == null
+        ? null
+        : LatLng(
+            activeTrip!.originLocation!.latitude,
+            activeTrip.originLocation!.longitude,
+          );
+    final destinationPoint = activeTrip?.destinationLocation == null
+        ? null
+        : LatLng(
+            activeTrip!.destinationLocation!.latitude,
+            activeTrip.destinationLocation!.longitude,
+          );
+    final pickupEtaMinutes =
+        activeTrip != null &&
+            activeTrip.status == "accepted" &&
+            pickupPoint != null
+        ? _estimateMinutesToTarget(routePath, pickupPoint, activeTrip.durationMinutes)
+        : null;
+    final destinationEtaMinutes =
+        activeTrip != null &&
+            routePath.length > 1 &&
+            activeTrip.durationMinutes > 0 &&
+            destinationPoint != null
+        ? _estimateMinutesToTarget(
+            routePath,
+            destinationPoint,
+            activeTrip.durationMinutes,
+          )
+        : null;
 
-    final mustMove = _followMe && _shouldRecenter(point);
+    final mustMove = _followMe && _shouldRecenter(routeFocusPoint);
+    if (routeFocusKey == null) {
+      _lastRouteFocusKey = null;
+    } else if (routeFocusKey != _lastRouteFocusKey && routePath.length > 1) {
+      _lastRouteFocusKey = routeFocusKey;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _focusNavigation(routePath, point);
+      });
+    }
     if (mustMove) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        _centerOn(point);
+        if (routePath.length > 1) {
+          _focusNavigation(routePath, point);
+        } else {
+          _centerOn(point);
+        }
       });
     }
+    _syncNavigationRotation(hasStartedTrip);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
@@ -157,6 +452,7 @@ class _DriverMapState extends State<DriverMap> {
         borderRadius: BorderRadius.circular(24),
         child: Stack(
           children: [
+            const ColoredBox(color: Color(0xFF091018)),
             FlutterMap(
               mapController: _mapController,
               options: MapOptions(
@@ -165,6 +461,9 @@ class _DriverMapState extends State<DriverMap> {
                     ? 4.4
                     : 16,
                 maxZoom: 19,
+                interactionOptions: const InteractionOptions(
+                  flags: InteractiveFlag.all,
+                ),
                 onPositionChanged: (position, hasGesture) {
                   _zoom = position.zoom;
                   if (hasGesture && _followMe) {
@@ -173,14 +472,19 @@ class _DriverMapState extends State<DriverMap> {
                 },
               ),
               children: [
-                _baseLayer(mapTheme),
+                ..._baseLayers(mapTheme),
                 if (routePath.length > 1)
                   PolylineLayer(
                     polylines: [
                       Polyline(
                         points: routePath,
-                        strokeWidth: 4,
-                        color: AppConstants.accent.withValues(alpha: 0.95),
+                        strokeWidth: 8.4,
+                        color: const Color(0xB0000000),
+                      ),
+                      Polyline(
+                        points: routePath,
+                        strokeWidth: 5.8,
+                        color: const Color(0xFFFF5A5F),
                       ),
                     ],
                   ),
@@ -188,12 +492,15 @@ class _DriverMapState extends State<DriverMap> {
                   markers: [
                     Marker(
                       point: point,
-                      width: 122,
-                      height: 82,
+                      width: 88,
+                      height: 62,
                       child: MapMarker(
-                        label: self?.name ?? t(es: "Driver", en: "Driver"),
+                        label: compactPersonName(
+                          self?.name ?? t(es: "Driver", en: "Driver"),
+                        ),
                         active: true,
                         carMode: true,
+                        headingDegrees: heading,
                       ),
                     ),
                   ],
@@ -203,22 +510,51 @@ class _DriverMapState extends State<DriverMap> {
             Positioned(
               top: 10,
               left: 10,
-              child: _StatusChip(
-                status: self == null
-                    ? (_viewerLocation == null
-                          ? t(
-                              es: "Buscando ubicacion...",
-                              en: "Looking for location...",
-                            )
-                          : t(es: "Ubicacion lista", en: "Location ready"))
-                    : hasRealSelfLocation
-                    ? (context.isEnglish
-                          ? _statusEnglish(self.status)
-                          : self.status)
-                    : t(
-                        es: "Concede ubicacion exacta",
-                        en: "Allow precise location",
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _StatusChip(
+                    status: self == null
+                        ? (_viewerLocation == null
+                              ? t(
+                                  es: "Buscando ubicacion...",
+                                  en: "Looking for location...",
+                                )
+                              : t(es: "Ubicacion lista", en: "Location ready"))
+                        : hasRealSelfLocation
+                        ? (context.isEnglish
+                              ? _statusEnglish(self.status)
+                              : self.status)
+                        : t(
+                            es: "Concede ubicacion exacta",
+                            en: "Allow precise location",
+                          ),
+                  ),
+                  if (pickupEtaMinutes != null) ...[
+                    const SizedBox(height: 8),
+                    _EtaChip(
+                      icon: Icons.person_pin_circle_rounded,
+                      label: t(
+                        es:
+                            "Recogida ${etaClock(DateTime.now().add(Duration(minutes: pickupEtaMinutes)))}",
+                        en:
+                            "Pickup ${etaClock(DateTime.now().add(Duration(minutes: pickupEtaMinutes)))}",
                       ),
+                    ),
+                  ],
+                  if (destinationEtaMinutes != null) ...[
+                    const SizedBox(height: 8),
+                    _EtaChip(
+                      icon: Icons.flag_rounded,
+                      label: t(
+                        es:
+                            "Destino ${etaClock(DateTime.now().add(Duration(minutes: destinationEtaMinutes)))}",
+                        en:
+                            "Destination ${etaClock(DateTime.now().add(Duration(minutes: destinationEtaMinutes)))}",
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
             if (_forceStableTiles)
@@ -233,8 +569,24 @@ class _DriverMapState extends State<DriverMap> {
                 ),
               ),
             Positioned(
+              top: 10,
               right: 10,
-              top: 96,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  _SpeedChip(
+                    label: context.isEnglish
+                        ? "${speedMph.toStringAsFixed(0)} mph"
+                        : "${speedMph.toStringAsFixed(0)} mph",
+                  ),
+                  const SizedBox(height: 8),
+                  _CompassChip(label: _compassLabel(t)),
+                ],
+              ),
+            ),
+            Positioned(
+              right: 10,
+              top: 54,
               child: Column(
                 children: [
                   _CircleAction(
@@ -247,11 +599,24 @@ class _DriverMapState extends State<DriverMap> {
                   _CircleAction(
                     icon: Icons.my_location_rounded,
                     onTap: () {
-                      _centerOn(point);
+                      if (routePath.length > 1) {
+                        _focusNavigation(routePath, point);
+                      } else {
+                        _centerOn(point);
+                      }
                       setState(() => _followMe = true);
                     },
                   ),
                   const SizedBox(height: 8),
+                  if (routePath.length > 1)
+                    _CircleAction(
+                      icon: Icons.alt_route_rounded,
+                      onTap: () {
+                        _fitRoute(routePath, point);
+                        setState(() => _followMe = true);
+                      },
+                    ),
+                  if (routePath.length > 1) const SizedBox(height: 8),
                   _CircleAction(
                     icon: Icons.add_rounded,
                     onTap: () {
@@ -332,6 +697,94 @@ class _StatusChip extends StatelessWidget {
         border: Border.all(color: const Color(0x30FFFFFF)),
       ),
       child: Text(status, style: const TextStyle(fontWeight: FontWeight.w700)),
+    );
+  }
+}
+
+class _EtaChip extends StatelessWidget {
+  const _EtaChip({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: const Color(0xD8191D24),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: const Color(0x3D7EC8FF)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: const Color(0xFF72BBFF)),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SpeedChip extends StatelessWidget {
+  const _SpeedChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: const Color(0xE1111111),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: const Color(0x36FFFFFF)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.speed_rounded, size: 15, color: Color(0xFFFFC857)),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CompassChip extends StatelessWidget {
+  const _CompassChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: const Color(0xE1111111),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: const Color(0x3672BBFF)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.explore_rounded, size: 15, color: Color(0xFF72BBFF)),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+        ],
+      ),
     );
   }
 }

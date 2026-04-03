@@ -46,6 +46,7 @@ class RouteEstimate {
 
 class MapService {
   static const String _recentPlacesKey = "atob_recent_places_v1";
+  static const Duration _networkTimeout = Duration(seconds: 8);
 
   LatLng centerFromDrivers(List<DriverModel> drivers, {LatLng? fallback}) {
     final validDrivers = drivers
@@ -114,15 +115,19 @@ class MapService {
     );
 
     final client = HttpClient();
+    client.connectionTimeout = _networkTimeout;
     try {
       final request = await client.getUrl(url);
       request.headers.set(HttpHeaders.userAgentHeader, "AtoB/1.0");
-      final response = await request.close();
+      final response = await request.close().timeout(_networkTimeout);
       if (response.statusCode != 200) {
         return <AddressSuggestion>[];
       }
 
-      final body = await response.transform(utf8.decoder).join();
+      final body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(_networkTimeout);
       final json = jsonDecode(body);
       if (json is! Map<String, dynamic>) {
         return <AddressSuggestion>[];
@@ -197,14 +202,18 @@ class MapService {
       "&accept-language=es",
     );
     final client = HttpClient();
+    client.connectionTimeout = _networkTimeout;
     try {
       final request = await client.getUrl(url);
       request.headers.set(HttpHeaders.userAgentHeader, "AtoB/1.0");
-      final response = await request.close();
+      final response = await request.close().timeout(_networkTimeout);
       if (response.statusCode != 200) {
         return <AddressSuggestion>[];
       }
-      final body = await response.transform(utf8.decoder).join();
+      final body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(_networkTimeout);
       final json = jsonDecode(body);
       if (json is! List) {
         return <AddressSuggestion>[];
@@ -312,15 +321,19 @@ class MapService {
     );
 
     final client = HttpClient();
+    client.connectionTimeout = _networkTimeout;
     try {
       final request = await client.getUrl(url);
       request.headers.set(HttpHeaders.userAgentHeader, "AtoB/1.0");
-      final response = await request.close();
+      final response = await request.close().timeout(_networkTimeout);
       if (response.statusCode != 200) {
         return _fallbackEstimate(origin: origin, destination: destination);
       }
 
-      final body = await response.transform(utf8.decoder).join();
+      final body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(_networkTimeout);
       final json = jsonDecode(body);
       if (json is! Map<String, dynamic>) {
         return _fallbackEstimate(origin: origin, destination: destination);
@@ -373,6 +386,46 @@ class MapService {
     }
   }
 
+  Future<RouteEstimate?> calculateRouteChain({
+    required List<LatLng> stops,
+  }) async {
+    final cleaned = <LatLng>[];
+    for (final stop in stops) {
+      if (cleaned.isEmpty) {
+        cleaned.add(stop);
+        continue;
+      }
+      final last = cleaned.last;
+      if ((last.latitude - stop.latitude).abs() < 0.00001 &&
+          (last.longitude - stop.longitude).abs() < 0.00001) {
+        continue;
+      }
+      cleaned.add(stop);
+    }
+    if (cleaned.length < 2) return null;
+    if (cleaned.length == 2) {
+      return calculateRoute(origin: cleaned.first, destination: cleaned.last);
+    }
+
+    final coords = cleaned
+        .map((point) => "${point.longitude},${point.latitude}")
+        .join(";");
+    if (!AppConstants.hasMapboxToken) {
+      return _calculateRouteChainWithOsrm(stops: cleaned);
+    }
+    final url = Uri.parse(
+      "https://api.mapbox.com/directions/v5/mapbox/driving/$coords"
+      "?alternatives=false"
+      "&continue_straight=true"
+      "&geometries=geojson"
+      "&overview=full"
+      "&steps=false"
+      "&access_token=${AppConstants.mapboxToken}",
+    );
+    final estimate = await _requestRouteEstimate(url, fallbackPath: cleaned);
+    return estimate ?? _calculateRouteChainWithOsrm(stops: cleaned);
+  }
+
   Future<RouteEstimate?> _calculateRouteWithOsrm({
     required LatLng origin,
     required LatLng destination,
@@ -386,14 +439,18 @@ class MapService {
       "&steps=false",
     );
     final client = HttpClient();
+    client.connectionTimeout = _networkTimeout;
     try {
       final request = await client.getUrl(url);
       request.headers.set(HttpHeaders.userAgentHeader, "AtoB/1.0");
-      final response = await request.close();
+      final response = await request.close().timeout(_networkTimeout);
       if (response.statusCode != 200) {
         return _fallbackEstimate(origin: origin, destination: destination);
       }
-      final body = await response.transform(utf8.decoder).join();
+      final body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(_networkTimeout);
       final json = jsonDecode(body);
       if (json is! Map<String, dynamic>) {
         return _fallbackEstimate(origin: origin, destination: destination);
@@ -442,6 +499,21 @@ class MapService {
     } finally {
       client.close(force: true);
     }
+  }
+
+  Future<RouteEstimate?> _calculateRouteChainWithOsrm({
+    required List<LatLng> stops,
+  }) async {
+    final coords = stops
+        .map((point) => "${point.longitude},${point.latitude}")
+        .join(";");
+    final url = Uri.parse(
+      "https://router.project-osrm.org/route/v1/driving/$coords"
+      "?overview=full"
+      "&geometries=geojson"
+      "&steps=false",
+    );
+    return _requestRouteEstimate(url, fallbackPath: stops);
   }
 
   RouteEstimate _fallbackEstimate({
@@ -459,6 +531,72 @@ class MapService {
       fareUsd: fare,
       path: [origin, destination],
     );
+  }
+
+  Future<RouteEstimate?> _requestRouteEstimate(
+    Uri url, {
+    required List<LatLng> fallbackPath,
+  }) async {
+    final client = HttpClient();
+    client.connectionTimeout = _networkTimeout;
+    try {
+      final request = await client.getUrl(url);
+      request.headers.set(HttpHeaders.userAgentHeader, "AtoB/1.0");
+      final response = await request.close().timeout(_networkTimeout);
+      if (response.statusCode != 200) {
+        return null;
+      }
+      final body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(_networkTimeout);
+      final json = jsonDecode(body);
+      if (json is! Map<String, dynamic>) {
+        return null;
+      }
+      final routes = json["routes"];
+      if (routes is! List || routes.isEmpty) {
+        return null;
+      }
+      final first = routes.first;
+      if (first is! Map) {
+        return null;
+      }
+      final map = first.cast<String, dynamic>();
+      final meters = (map["distance"] as num?)?.toDouble() ?? 0;
+      final seconds = (map["duration"] as num?)?.toDouble() ?? 0;
+      final miles = meters / 1609.344;
+      final fare = fareForMiles(miles);
+      final path = <LatLng>[];
+      final geometry = map["geometry"];
+      if (geometry is Map) {
+        final coordinates = geometry["coordinates"];
+        if (coordinates is List) {
+          for (final item in coordinates) {
+            if (item is List && item.length >= 2) {
+              final lon = item[0];
+              final lat = item[1];
+              if (lon is num && lat is num) {
+                path.add(LatLng(lat.toDouble(), lon.toDouble()));
+              }
+            }
+          }
+        }
+      }
+      if (path.isEmpty) {
+        path.addAll(fallbackPath);
+      }
+      return RouteEstimate(
+        distanceMiles: miles,
+        durationMinutes: seconds / 60,
+        fareUsd: fare,
+        path: path,
+      );
+    } catch (_) {
+      return null;
+    } finally {
+      client.close(force: true);
+    }
   }
 
   double fareForMiles(double miles) {

@@ -19,6 +19,8 @@ extension AtoBAppText on BuildContext {
         return txt(es: "Asignado", en: "Assigned");
       case "accepted":
         return txt(es: "En ruta", en: "On the way");
+      case "picked_up":
+        return txt(es: "Cliente a bordo", en: "Passenger onboard");
       case "completed":
         return txt(es: "Completado", en: "Completed");
       case "rejected":

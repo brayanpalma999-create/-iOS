@@ -14,6 +14,33 @@ import "../../widgets/custom_button.dart";
 import "../../widgets/custom_input.dart";
 import "../../widgets/group_inbox_thread.dart";
 
+const Map<String, List<String>> _vehicleModelsByMake = {
+  "Toyota": ["Corolla", "Camry", "Prius", "RAV4", "Highlander", "Sienna"],
+  "Honda": ["Civic", "Accord", "CR-V", "Pilot", "Odyssey", "Fit"],
+  "Nissan": ["Versa", "Sentra", "Altima", "Rogue", "Murano", "Pathfinder"],
+  "Hyundai": ["Accent", "Elantra", "Sonata", "Tucson", "Santa Fe", "Palisade"],
+  "Kia": ["Rio", "Forte", "K5", "Soul", "Sportage", "Telluride"],
+  "Chevrolet": ["Spark", "Malibu", "Cruze", "Trax", "Equinox", "Tahoe"],
+  "Ford": ["Focus", "Fusion", "Escape", "Explorer", "Edge", "Maverick"],
+  "Tesla": ["Model 3", "Model Y", "Model S", "Model X"],
+  "Mazda": ["Mazda3", "Mazda6", "CX-3", "CX-5", "CX-9"],
+  "Volkswagen": ["Jetta", "Passat", "Taos", "Tiguan", "Atlas"],
+  "Otro": ["Sedan", "SUV", "Pickup", "Van", "Hatchback", "Coupe"],
+};
+
+const List<String> _vehicleColors = [
+  "Negro",
+  "Blanco",
+  "Gris",
+  "Plata",
+  "Azul",
+  "Rojo",
+  "Verde",
+  "Cafe",
+  "Beige",
+  "Dorado",
+];
+
 class DriverProfileSettingsPage extends StatefulWidget {
   const DriverProfileSettingsPage({super.key});
 
@@ -29,9 +56,14 @@ class _DriverProfileSettingsPageState extends State<DriverProfileSettingsPage> {
   final _phoneCtrl = TextEditingController();
   final _addressCtrl = TextEditingController();
   final _governmentIdCtrl = TextEditingController();
+  final _vehiclePlateCtrl = TextEditingController();
   final ImagePicker _picker = ImagePicker();
   bool _seeded = false;
   bool _updatingAvatar = false;
+  String? _vehicleMake;
+  String? _vehicleModel;
+  String? _vehicleColor;
+  String? _vehicleYear;
 
   @override
   void didChangeDependencies() {
@@ -45,6 +77,11 @@ class _DriverProfileSettingsPageState extends State<DriverProfileSettingsPage> {
     _phoneCtrl.text = user?.phoneNumber ?? "";
     _addressCtrl.text = user?.address ?? "";
     _governmentIdCtrl.text = user?.governmentId ?? "";
+    _vehiclePlateCtrl.text = user?.vehiclePlate ?? "";
+    _vehicleMake = _safeVehicleMake(user?.vehicleMake);
+    _vehicleModel = _safeVehicleModel(_vehicleMake, user?.vehicleModel);
+    _vehicleColor = _safeVehicleColor(user?.vehicleColor);
+    _vehicleYear = _safeVehicleYear(user?.vehicleYear);
   }
 
   @override
@@ -55,7 +92,41 @@ class _DriverProfileSettingsPageState extends State<DriverProfileSettingsPage> {
     _phoneCtrl.dispose();
     _addressCtrl.dispose();
     _governmentIdCtrl.dispose();
+    _vehiclePlateCtrl.dispose();
     super.dispose();
+  }
+
+  List<String> get _vehicleYears {
+    final currentYear = DateTime.now().year + 1;
+    return List<String>.generate(
+      currentYear - 1999,
+      (index) => (currentYear - index).toString(),
+    );
+  }
+
+  String? _safeVehicleMake(String? value) {
+    final clean = value?.trim();
+    if (clean == null || clean.isEmpty) return null;
+    return _vehicleModelsByMake.containsKey(clean) ? clean : "Otro";
+  }
+
+  String? _safeVehicleModel(String? make, String? value) {
+    final clean = value?.trim();
+    if (make == null || clean == null || clean.isEmpty) return null;
+    final models = _vehicleModelsByMake[make] ?? const <String>[];
+    return models.contains(clean) ? clean : null;
+  }
+
+  String? _safeVehicleColor(String? value) {
+    final clean = value?.trim();
+    if (clean == null || clean.isEmpty) return null;
+    return _vehicleColors.contains(clean) ? clean : null;
+  }
+
+  String? _safeVehicleYear(String? value) {
+    final clean = value?.trim();
+    if (clean == null || clean.isEmpty) return null;
+    return _vehicleYears.contains(clean) ? clean : null;
   }
 
   Future<void> _pickAvatar() async {
@@ -86,8 +157,19 @@ class _DriverProfileSettingsPageState extends State<DriverProfileSettingsPage> {
       phoneNumber: _phoneCtrl.text,
       address: _addressCtrl.text,
       governmentId: _governmentIdCtrl.text,
+      vehicleMake: _vehicleMake,
+      vehicleModel: _vehicleModel,
+      vehicleColor: _vehicleColor,
+      vehiclePlate: _vehiclePlateCtrl.text,
+      vehicleYear: _vehicleYear,
     );
-    context.read<DriverProvider>().updateDisplayName(_displayNameCtrl.text);
+    final auth = context.read<AuthProvider>();
+    final updatedUser = auth.user;
+    if (updatedUser != null) {
+      context.read<DriverProvider>().syncProfileFromUser(updatedUser);
+    } else {
+      context.read<DriverProvider>().updateDisplayName(_displayNameCtrl.text);
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(t(es: "Perfil actualizado", en: "Profile updated")),
@@ -154,6 +236,138 @@ class _DriverProfileSettingsPageState extends State<DriverProfileSettingsPage> {
             hint: t(es: "Identificacion", en: "ID"),
             prefixIcon: Icons.credit_card_outlined,
           ),
+          const SizedBox(height: 12),
+          Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF101214),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: const Color(0x22FFFFFF)),
+            ),
+            child: Theme(
+              data: Theme.of(context).copyWith(
+                dividerColor: Colors.transparent,
+              ),
+              child: ExpansionTile(
+                initiallyExpanded: true,
+                leading: const Icon(Icons.directions_car_filled_rounded),
+                title: Text(
+                  t(es: "Datos del vehiculo", en: "Vehicle details"),
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                subtitle: Text(
+                  t(
+                    es: "Marca, modelo, color, placas y ano del vehiculo",
+                    en: "Make, model, color, plate, and vehicle year",
+                  ),
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+                childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                children: [
+                  DropdownButtonFormField<String>(
+                    key: ValueKey<String?>("vehicle-make-$_vehicleMake"),
+                    initialValue: _vehicleMake,
+                    dropdownColor: const Color(0xFF111315),
+                    decoration: InputDecoration(
+                      labelText: t(es: "Marca", en: "Make"),
+                      prefixIcon: const Icon(Icons.factory_outlined),
+                    ),
+                    items: _vehicleModelsByMake.keys
+                        .map(
+                          (make) => DropdownMenuItem<String>(
+                            value: make,
+                            child: Text(make),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      setState(() {
+                        _vehicleMake = value;
+                        final models = _vehicleModelsByMake[value] ?? const <String>[];
+                        if (!models.contains(_vehicleModel)) {
+                          _vehicleModel = null;
+                        }
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  DropdownButtonFormField<String>(
+                    key: ValueKey<String?>("vehicle-model-$_vehicleMake-$_vehicleModel"),
+                    initialValue: _vehicleModel,
+                    dropdownColor: const Color(0xFF111315),
+                    decoration: InputDecoration(
+                      labelText: t(es: "Modelo", en: "Model"),
+                      prefixIcon: const Icon(Icons.local_taxi_outlined),
+                    ),
+                    items: (_vehicleModelsByMake[_vehicleMake] ?? const <String>[])
+                        .map(
+                          (model) => DropdownMenuItem<String>(
+                            value: model,
+                            child: Text(model),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: _vehicleMake == null
+                        ? null
+                        : (value) => setState(() => _vehicleModel = value),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          key: ValueKey<String?>("vehicle-color-$_vehicleColor"),
+                          initialValue: _vehicleColor,
+                          dropdownColor: const Color(0xFF111315),
+                          decoration: InputDecoration(
+                            labelText: t(es: "Color", en: "Color"),
+                            prefixIcon: const Icon(Icons.palette_outlined),
+                          ),
+                          items: _vehicleColors
+                              .map(
+                                (color) => DropdownMenuItem<String>(
+                                  value: color,
+                                  child: Text(color),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) =>
+                              setState(() => _vehicleColor = value),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          key: ValueKey<String?>("vehicle-year-$_vehicleYear"),
+                          initialValue: _vehicleYear,
+                          dropdownColor: const Color(0xFF111315),
+                          decoration: InputDecoration(
+                            labelText: t(es: "Ano", en: "Year"),
+                            prefixIcon: const Icon(Icons.event_outlined),
+                          ),
+                          items: _vehicleYears
+                              .map(
+                                (year) => DropdownMenuItem<String>(
+                                  value: year,
+                                  child: Text(year),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) =>
+                              setState(() => _vehicleYear = value),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  CustomInput(
+                    controller: _vehiclePlateCtrl,
+                    hint: t(es: "Placas", en: "Plate number"),
+                    prefixIcon: Icons.pin_outlined,
+                  ),
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: 18),
           CustomButton(
             label: t(es: "Guardar cambios", en: "Save changes"),
@@ -186,7 +400,12 @@ class _DriverPreferencesSettingsPageState
     if (_seeded) return;
     _seeded = true;
     final driver = context.read<DriverProvider>().self;
-    _draftTheme = context.read<MapUiProvider>().themeMode;
+    final storedTheme = context.read<AuthProvider>().user?.mapThemeMode ?? "";
+    _draftTheme = switch (storedTheme) {
+      "dark" => MapThemeMode.dark,
+      "satellite" => MapThemeMode.satellite,
+      _ => context.read<MapUiProvider>().themeMode,
+    };
     _draftLanguage = context.read<AuthProvider>().user?.languageCode ?? "es";
     _draftVisible = (driver?.status ?? "").toLowerCase().startsWith(
       "disponible",
@@ -291,6 +510,13 @@ class _DriverPreferencesSettingsPageState
                 return;
               }
               context.read<MapUiProvider>().setThemeMode(_draftTheme);
+              context.read<AuthProvider>().setMapThemeMode(
+                switch (_draftTheme) {
+                  MapThemeMode.dark => "dark",
+                  MapThemeMode.satellite => "satellite",
+                  MapThemeMode.flow => "flow",
+                },
+              );
               context.read<AuthProvider>().setLanguageCode(_draftLanguage);
               context.read<DriverProvider>().setOperationalStatus(
                 _draftVisible

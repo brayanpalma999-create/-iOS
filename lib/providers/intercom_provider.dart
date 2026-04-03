@@ -7,6 +7,7 @@ import "driver_provider.dart";
 import "../services/beep_service.dart";
 import "../services/livekit_intercom_service.dart";
 import "../utils/constants.dart";
+import "../utils/helpers.dart";
 
 enum IntercomChannel { public, private }
 
@@ -97,7 +98,7 @@ class IntercomProvider extends ChangeNotifier {
       .map(
         (driver) => IntercomPeer(
           id: driver.intercomId ?? driver.id,
-          name: driver.name,
+          name: compactPersonName(driver.name),
           role: "driver",
         ),
       )
@@ -116,7 +117,7 @@ class IntercomProvider extends ChangeNotifier {
     if (id.toLowerCase() == "admin") return "Admin";
     for (final driver in _driverProvider.drivers) {
       if (driver.id == id || driver.intercomId == id) {
-        return "${driver.name} (#${driver.id})";
+        return compactPersonName(driver.name);
       }
     }
     return id;
@@ -146,9 +147,9 @@ class IntercomProvider extends ChangeNotifier {
   String get _effectiveSelfName {
     final providerName = _driverProvider.self?.name.trim();
     if (!selfIsAdmin && providerName != null && providerName.isNotEmpty) {
-      return providerName;
+      return compactPersonName(providerName);
     }
-    return _selfName;
+    return compactPersonName(_selfName);
   }
 
   void setMode({required bool private, String? targetId}) {
@@ -217,6 +218,7 @@ class IntercomProvider extends ChangeNotifier {
         throw StateError("No se pudo enlazar el canal actual");
       }
 
+      await _liveKitService.refreshAudioPipeline();
       await _liveKitService.sendSignal(_signalPayload(type: "ptt-start"));
       await _liveKitService.startPublishing();
 
@@ -323,6 +325,7 @@ class IntercomProvider extends ChangeNotifier {
       _joinedChannelId = channelId;
       _localParticipantUid = _liveKitService.localUid ?? localUid;
       _rememberSelfPeer();
+      await _liveKitService.refreshAudioPipeline();
       await _liveKitService.setRemoteMuted(_isMuted);
       await _liveKitService.sendSignal(_signalPayload(type: "presence"));
       _lastErrorMessage = null;
@@ -339,6 +342,7 @@ class IntercomProvider extends ChangeNotifier {
         _joinedChannelId = event.channelId;
         _localParticipantUid = event.uid;
         _rememberSelfPeer();
+        unawaited(_liveKitService.refreshAudioPipeline());
         unawaited(_liveKitService.setRemoteMuted(_isMuted));
         unawaited(_liveKitService.sendSignal(_signalPayload(type: "presence")));
         _lastErrorMessage = null;
@@ -378,6 +382,9 @@ class IntercomProvider extends ChangeNotifier {
         notifyListeners();
         return;
       case LiveKitIntercomEventType.connection:
+        if (event.connected == true) {
+          unawaited(_liveKitService.refreshAudioPipeline());
+        }
         if (event.connected == false && !_isTransmitting) {
           _clearIncomingSpeaker(notify: true);
         }
@@ -434,6 +441,7 @@ class IntercomProvider extends ChangeNotifier {
         return;
       case "ptt-start":
         unawaited(_applySpeakerRouting(uid: uid, payload: payload));
+        unawaited(_liveKitService.refreshAudioPipeline());
         _remoteSpeakerPinned = true;
         _markRemoteSpeaker(
           uid: uid,
@@ -540,7 +548,7 @@ class IntercomProvider extends ChangeNotifier {
   void _setSelfAsActiveSpeaker() {
     _activeSpeakerUid = _localParticipantUid ?? _resolveLocalParticipantUid();
     _activeSpeakerId = _participantId;
-    _activeSpeakerName = _selfName;
+    _activeSpeakerName = _effectiveSelfName;
     _activeSpeakerRole = _selfRole;
     _channelBusy = true;
   }
@@ -623,7 +631,7 @@ class IntercomProvider extends ChangeNotifier {
       if (_driverParticipantUid(intercomId) == uid) {
         final peer = IntercomPeer(
           id: intercomId,
-          name: driver.name,
+          name: compactPersonName(driver.name),
           role: "driver",
         );
         _peerByUid[uid] = peer;

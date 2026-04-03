@@ -16,6 +16,7 @@ import "services/beep_service.dart";
 import "services/livekit_intercom_service.dart";
 import "services/livekit_token_service.dart";
 import "services/location_service.dart";
+import "services/map_service.dart";
 import "services/permission_service.dart";
 import "services/socket_service.dart";
 import "services/trip_service.dart";
@@ -69,6 +70,7 @@ class _AtoBAppState extends State<AtoBApp> with WidgetsBindingObserver {
       providers: [
         Provider<SocketService>(create: (_) => SocketService()),
         Provider<LocationService>(create: (_) => LocationService()),
+        Provider<MapService>(create: (_) => MapService()),
         Provider<BeepService>(create: (_) => BeepService()),
         Provider<LiveKitTokenService>(
           create: (_) => LiveKitTokenService(),
@@ -94,15 +96,17 @@ class _AtoBAppState extends State<AtoBApp> with WidgetsBindingObserver {
                 tripService: tripService,
               ),
         ),
-        ChangeNotifierProxyProvider3<
+        ChangeNotifierProxyProvider4<
           SocketService,
           LocationService,
+          MapService,
           TripProvider,
           DriverProvider
         >(
           create: (context) => DriverProvider(
             socketService: context.read<SocketService>(),
             locationService: context.read<LocationService>(),
+            mapService: context.read<MapService>(),
             tripProvider: context.read<TripProvider>(),
           ),
           update:
@@ -110,6 +114,7 @@ class _AtoBAppState extends State<AtoBApp> with WidgetsBindingObserver {
                 context,
                 socketService,
                 locationService,
+                mapService,
                 tripProvider,
                 previous,
               ) =>
@@ -117,6 +122,7 @@ class _AtoBAppState extends State<AtoBApp> with WidgetsBindingObserver {
                   DriverProvider(
                     socketService: socketService,
                     locationService: locationService,
+                    mapService: mapService,
                     tripProvider: tripProvider,
                   ),
         ),

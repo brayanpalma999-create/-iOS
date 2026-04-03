@@ -171,6 +171,7 @@ class LiveKitIntercomService {
       roomOptions: const RoomOptions(
         adaptiveStream: false,
         dynacast: false,
+        defaultAudioOutputOptions: AudioOutputOptions(speakerOn: true),
         defaultAudioCaptureOptions: AudioCaptureOptions(
           noiseSuppression: true,
           echoCancellation: true,
@@ -198,7 +199,7 @@ class LiveKitIntercomService {
 
       await room.localParticipant?.setMicrophoneEnabled(true);
       await room.localParticipant?.setMicrophoneEnabled(false);
-      await _applyRemoteMuteState();
+      await refreshAudioPipeline();
 
       for (final participant in room.remoteParticipants.values) {
         final identity = participant.identity;
@@ -233,6 +234,7 @@ class LiveKitIntercomService {
   Future<void> startPublishing() async {
     final room = _room;
     if (room == null) return;
+    await _ensureSpeakerOutput(room);
     await room.localParticipant?.setMicrophoneEnabled(true);
   }
 
@@ -240,6 +242,7 @@ class LiveKitIntercomService {
     final room = _room;
     if (room == null) return;
     await room.localParticipant?.setMicrophoneEnabled(false);
+    await refreshAudioPipeline();
   }
 
   Future<void> setRemoteMuted(bool muted) async {
@@ -265,6 +268,13 @@ class LiveKitIntercomService {
     for (final identity in identities) {
       await _applyMuteStateToIdentity(identity);
     }
+  }
+
+  Future<void> refreshAudioPipeline() async {
+    final room = _room;
+    if (room == null) return;
+    await _ensureSpeakerOutput(room);
+    await _applyRemoteMuteState();
   }
 
   Future<void> sendSignal(Map<String, dynamic> payload) async {
@@ -329,6 +339,11 @@ class LiveKitIntercomService {
   }
 
   Future<void> _handleRoomEvent(RoomEvent event) async {
+    if (event is RoomConnectedEvent) {
+      await refreshAudioPipeline();
+      return;
+    }
+
     if (event is ParticipantConnectedEvent) {
       final identity = event.participant.identity;
       final uid = _participantUidForIdentity(identity);
@@ -345,6 +360,32 @@ class LiveKitIntercomService {
       final uid = _participantUidForIdentity(identity);
       _mutedRemoteIdentities.remove(identity);
       _events.add(LiveKitIntercomEvent.peerLeft(uid: uid, identity: identity));
+      return;
+    }
+
+    if (event is TrackSubscribedEvent) {
+      final identity = event.participant.identity;
+      final uid = _participantUidForIdentity(identity);
+      _rememberIdentity(identity: identity, uid: uid);
+      await _applyMuteStateToIdentity(identity);
+      return;
+    }
+
+    if (event is TrackUnsubscribedEvent) {
+      final track = event.track;
+      if (track is RemoteAudioTrack) {
+        await track.stop();
+      }
+      return;
+    }
+
+    if (event is TrackMutedEvent && event.participant is RemoteParticipant) {
+      await _applyMuteStateToIdentity(event.participant.identity);
+      return;
+    }
+
+    if (event is TrackUnmutedEvent && event.participant is RemoteParticipant) {
+      await _applyMuteStateToIdentity(event.participant.identity);
       return;
     }
 
@@ -393,6 +434,17 @@ class LiveKitIntercomService {
       return;
     }
 
+    if (event is RoomResumingEvent) {
+      _events.add(
+        LiveKitIntercomEvent.connection(
+          connected: false,
+          channelId: _joinedChannelId,
+          message: "LiveKit reanudando audio",
+        ),
+      );
+      return;
+    }
+
     if (event is RoomReconnectingEvent) {
       _events.add(
         LiveKitIntercomEvent.connection(
@@ -412,7 +464,7 @@ class LiveKitIntercomService {
           message: "LiveKit reconectado",
         ),
       );
-      await _applyRemoteMuteState();
+      await refreshAudioPipeline();
       return;
     }
 
@@ -465,11 +517,19 @@ class LiveKitIntercomService {
     for (final publication in participant.audioTrackPublications) {
       final track = publication.track;
       if (track == null) continue;
-      if (enabled) {
+      if (enabled && !publication.muted) {
         await track.start();
       } else {
         await track.stop();
       }
+    }
+  }
+
+  Future<void> _ensureSpeakerOutput(Room room) async {
+    try {
+      await room.setSpeakerOn(true, forceSpeakerOutput: true);
+    } catch (_) {
+      // Best-effort on unsupported outputs.
     }
   }
 

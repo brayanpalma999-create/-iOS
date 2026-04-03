@@ -6,6 +6,7 @@ import "package:provider/provider.dart";
 import "../../models/chat_message_model.dart";
 import "../../providers/chat_provider.dart";
 import "../../utils/app_text.dart";
+import "../../utils/helpers.dart";
 
 class GroupInboxThread extends StatefulWidget {
   const GroupInboxThread({
@@ -211,7 +212,7 @@ class _GroupMessageBubble extends StatelessWidget {
                     child: Text(
                       mine
                           ? context.txt(es: "Tu", en: "You")
-                          : message.senderName,
+                          : compactPersonName(message.senderName),
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: mine ? const Color(0xFF8DF5C6) : Colors.white,

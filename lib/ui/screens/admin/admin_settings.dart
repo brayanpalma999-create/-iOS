@@ -1,3 +1,5 @@
+import "dart:async";
+
 import "package:flutter/material.dart";
 import "package:provider/provider.dart";
 
@@ -16,8 +18,15 @@ import "../../widgets/custom_button.dart";
 import "../../widgets/custom_input.dart";
 import "../../widgets/help_sheet.dart";
 
-class AdminSettings extends StatelessWidget {
+class AdminSettings extends StatefulWidget {
   const AdminSettings({super.key});
+
+  @override
+  State<AdminSettings> createState() => _AdminSettingsState();
+}
+
+class _AdminSettingsState extends State<AdminSettings> {
+  Timer? _refreshTimer;
 
   Future<void> _logout(BuildContext context) async {
     await context.read<IntercomProvider>().releasePtt();
@@ -33,13 +42,36 @@ class AdminSettings extends StatelessWidget {
   }
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      context.read<AuthProvider>().refreshAuthorizedDrivers();
+    });
+    _refreshTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (!mounted) return;
+      context.read<AuthProvider>().refreshAuthorizedDrivers();
+    });
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     String t({required String es, required String en}) =>
         context.txt(es: es, en: en);
-    final user = context.watch<AuthProvider>().user;
+    final auth = context.watch<AuthProvider>();
+    final user = auth.user;
     final tripProvider = context.watch<TripProvider>();
     final drivers = context.watch<DriverProvider>().drivers;
     final onlineDrivers = drivers.where((driver) => driver.isOnline).length;
+    final validRecords = auth.authorizedDrivers
+        .where((profile) => profile.isActive && profile.isActivated)
+        .length;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -119,6 +151,19 @@ class AdminSettings extends StatelessWidget {
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
                   builder: (_) => const _AdminTripsPage(),
+                ),
+              ),
+            ),
+            _AccountTile(
+              icon: Icons.fact_check_outlined,
+              title: t(es: "Records", en: "Records"),
+              subtitle: t(
+                es: "$validRecords drivers activos con credenciales vigentes",
+                en: "$validRecords active drivers with valid credentials",
+              ),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const AdminRecordsPage(),
                 ),
               ),
             ),
@@ -630,26 +675,45 @@ class _AccountHeaderCard extends StatelessWidget {
                 Text(
                   name,
                   style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w900,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                    height: 1.1,
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 4),
-                Text(subtitle, style: const TextStyle(color: Colors.white70)),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12.4,
+                    height: 1.1,
+                  ),
+                ),
               ],
             ),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: const Color(0x1A3DDC97),
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Text(
-              badge,
-              style: const TextStyle(
-                fontWeight: FontWeight.w800,
-                color: Color(0xFF8DF5C6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 108),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0x1A3DDC97),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                badge,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF8DF5C6),
+                  fontSize: 11.5,
+                ),
               ),
             ),
           ),

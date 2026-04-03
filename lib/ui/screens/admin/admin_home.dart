@@ -1,10 +1,13 @@
 import "package:flutter/material.dart";
 import "package:provider/provider.dart";
+import "package:shared_preferences/shared_preferences.dart";
 
+import "../../../providers/auth_provider.dart";
 import "../../../providers/driver_provider.dart";
 import "../../../utils/app_text.dart";
 import "../../widgets/app_shell.dart";
 import "../../widgets/help_sheet.dart";
+import "admin_access.dart";
 import "admin_assign_trip.dart";
 import "admin_earnings.dart";
 import "admin_intercom.dart";
@@ -19,6 +22,7 @@ class AdminHome extends StatefulWidget {
 }
 
 class _AdminHomeState extends State<AdminHome> {
+  static const String _adminPanelIndexKey = "atob_admin_panel_index_v1";
   int _index = 0;
 
   final _tabs = const [
@@ -26,8 +30,31 @@ class _AdminHomeState extends State<AdminHome> {
     AdminAssignTrip(),
     AdminIntercom(),
     AdminEarnings(),
+    AdminAccess(),
     AdminSettings(),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _restoreAdminPanel();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      context.read<AuthProvider>().refreshAdminPanelState();
+    });
+  }
+
+  Future<void> _restoreAdminPanel() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedIndex = prefs.getInt(_adminPanelIndexKey) ?? 0;
+    if (!mounted) return;
+    setState(() => _index = savedIndex.clamp(0, _tabs.length - 1));
+  }
+
+  Future<void> _saveAdminPanelIndex(int index) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_adminPanelIndexKey, index);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -42,7 +69,8 @@ class _AdminHomeState extends State<AdminHome> {
       1 => t(es: "Centro de operaciones", en: "Operations center"),
       2 => t(es: "Intercom", en: "Intercom"),
       3 => t(es: "Ganancias", en: "Earnings"),
-      4 => t(es: "Cuenta", en: "Account"),
+      4 => t(es: "Acceso", en: "Access"),
+      5 => t(es: "Cuenta", en: "Account"),
       _ => t(es: "Mapa operativo", en: "Operations map"),
     };
     final helpTopic = switch (_index) {
@@ -50,6 +78,7 @@ class _AdminHomeState extends State<AdminHome> {
       2 => AtoBHelpTopic.intercom,
       3 => AtoBHelpTopic.adminEarnings,
       4 => AtoBHelpTopic.account,
+      5 => AtoBHelpTopic.account,
       _ => AtoBHelpTopic.adminMap,
     };
 
@@ -113,7 +142,10 @@ class _AdminHomeState extends State<AdminHome> {
         ),
         child: NavigationBar(
           selectedIndex: _index,
-          onDestinationSelected: (i) => setState(() => _index = i),
+          onDestinationSelected: (i) {
+            setState(() => _index = i);
+            _saveAdminPanelIndex(i);
+          },
           backgroundColor: Colors.transparent,
           destinations: [
             NavigationDestination(
@@ -131,6 +163,10 @@ class _AdminHomeState extends State<AdminHome> {
             NavigationDestination(
               icon: const Icon(Icons.payments_rounded),
               label: t(es: "Ganancias", en: "Earnings"),
+            ),
+            NavigationDestination(
+              icon: const Icon(Icons.badge_outlined),
+              label: t(es: "Acceso", en: "Access"),
             ),
             NavigationDestination(
               icon: CircleAvatar(

@@ -43,11 +43,13 @@ class TripProvider extends ChangeNotifier {
       originLocation: originLocation,
       destinationLocation: destinationLocation,
     );
+    _tripService.upsertTrip(trip);
     final payload = trip.toJson();
     payload["toDriverId"] = driverId;
     payload["targetId"] = driverId;
     payload["driverIntercomId"] = driverIntercomId ?? driverId;
     _socketService.emit("assign:trip", payload);
+    notifyListeners();
     return trip;
   }
 
@@ -60,6 +62,33 @@ class TripProvider extends ChangeNotifier {
       "status": status,
       if (trip != null) "driverId": trip.driverId,
     });
+    notifyListeners();
+  }
+
+  void updateTripNavigation({
+    required String tripId,
+    String? status,
+    double? distanceMiles,
+    double? durationMinutes,
+    double? fareUsd,
+    List<LocationModel>? routePoints,
+    LocationModel? originLocation,
+    LocationModel? destinationLocation,
+  }) {
+    _tripService.updateTrip(
+      tripId,
+      status: status,
+      distanceMiles: distanceMiles,
+      durationMinutes: durationMinutes,
+      fareUsd: fareUsd,
+      routePoints: routePoints,
+      originLocation: originLocation,
+      destinationLocation: destinationLocation,
+    );
+    final trip = _tripService.byId(tripId);
+    if (trip != null) {
+      _socketService.emit("trip:update", trip.toJson());
+    }
     notifyListeners();
   }
 
@@ -82,6 +111,28 @@ class TripProvider extends ChangeNotifier {
 
   double confirmedRevenue({String? driverId}) =>
       _tripService.confirmedRevenue(driverId: driverId);
+
+  double serviceFeeRevenue({String? driverId, bool confirmedOnly = false}) =>
+      _tripService.serviceFeeRevenue(
+        driverId: driverId,
+        confirmedOnly: confirmedOnly,
+      );
+
+  double driverNetRevenue({String? driverId, bool confirmedOnly = false}) =>
+      _tripService.driverNetRevenue(
+        driverId: driverId,
+        confirmedOnly: confirmedOnly,
+      );
+
+  double serviceFeeForTrip(TripModel trip) => _tripService.serviceFeeForTrip(trip);
+
+  double driverNetForTrip(TripModel trip) => _tripService.driverNetForTrip(trip);
+
+  double averageDriverNet({String? driverId}) =>
+      _tripService.averageDriverNet(driverId: driverId);
+
+  bool countsTowardConfirmedEarnings(TripModel trip) =>
+      _tripService.countsTowardConfirmedEarnings(trip);
 
   int completedTrips({String? driverId}) =>
       _tripService.completedTrips(driverId: driverId);
@@ -156,6 +207,14 @@ class TripProvider extends ChangeNotifier {
       final id = _stringValue(map["tripId"] ?? map["id"]);
       if (id == null || id.isEmpty) return;
       _tripService.updateStatus(id, "accepted");
+      notifyListeners();
+    });
+    _socketService.on("trip:picked_up", (payload) {
+      final map = _asStringMap(payload);
+      if (map == null) return;
+      final id = _stringValue(map["tripId"] ?? map["id"]);
+      if (id == null || id.isEmpty) return;
+      _tripService.updateStatus(id, "picked_up");
       notifyListeners();
     });
     _socketService.on("trip:rejected", (payload) {

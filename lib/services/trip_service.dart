@@ -2,6 +2,9 @@ import "../models/trip_model.dart";
 import "../models/location_model.dart";
 
 class TripService {
+  static const double adminServiceFeeRate = 0.25;
+  static const double driverNetRate = 0.75;
+
   final List<TripModel> _trips = <TripModel>[];
 
   List<TripModel> get trips => List.unmodifiable(_trips);
@@ -59,6 +62,29 @@ class TripService {
     _trips[index] = _trips[index].copyWith(status: status);
   }
 
+  void updateTrip(
+    String tripId, {
+    String? status,
+    double? distanceMiles,
+    double? durationMinutes,
+    double? fareUsd,
+    List<LocationModel>? routePoints,
+    LocationModel? originLocation,
+    LocationModel? destinationLocation,
+  }) {
+    final index = _trips.indexWhere((t) => t.id == tripId);
+    if (index < 0) return;
+    _trips[index] = _trips[index].copyWith(
+      status: status,
+      distanceMiles: distanceMiles,
+      durationMinutes: durationMinutes,
+      fareUsd: fareUsd,
+      routePoints: routePoints,
+      originLocation: originLocation,
+      destinationLocation: destinationLocation,
+    );
+  }
+
   TripModel? latestForDriver(String driverId) {
     for (final t in _trips) {
       if (t.driverId == driverId) return t;
@@ -69,7 +95,9 @@ class TripService {
   TripModel? latestActiveForDriver(String driverId) {
     for (final t in _trips) {
       if (t.driverId != driverId) continue;
-      if (t.status == "assigned" || t.status == "accepted") {
+      if (t.status == "assigned" ||
+          t.status == "accepted" ||
+          t.status == "picked_up") {
         return t;
       }
     }
@@ -86,7 +114,12 @@ class TripService {
         ? _trips
         : _trips.where((t) => t.driverId == driverId);
     return source
-        .where((t) => t.status == "assigned" || t.status == "accepted")
+        .where(
+          (t) =>
+              t.status == "assigned" ||
+              t.status == "accepted" ||
+              t.status == "picked_up",
+        )
         .length;
   }
 
@@ -107,6 +140,30 @@ class TripService {
         .where((t) => _isCompletedStatus(t.status))
         .fold<double>(0, (sum, t) => sum + t.fareUsd);
   }
+
+  double serviceFeeForTrip(TripModel trip) => trip.fareUsd * adminServiceFeeRate;
+
+  double driverNetForTrip(TripModel trip) => trip.fareUsd * driverNetRate;
+
+  double serviceFeeRevenue({String? driverId, bool confirmedOnly = false}) {
+    final source = _filteredTrips(driverId: driverId, confirmedOnly: confirmedOnly);
+    return source.fold<double>(0, (sum, trip) => sum + serviceFeeForTrip(trip));
+  }
+
+  double driverNetRevenue({String? driverId, bool confirmedOnly = false}) {
+    final source = _filteredTrips(driverId: driverId, confirmedOnly: confirmedOnly);
+    return source.fold<double>(0, (sum, trip) => sum + driverNetForTrip(trip));
+  }
+
+  double averageDriverNet({String? driverId}) {
+    final valid = _filteredTrips(driverId: driverId, confirmedOnly: false).toList();
+    if (valid.isEmpty) return 0;
+    final total = valid.fold<double>(0, (sum, trip) => sum + driverNetForTrip(trip));
+    return total / valid.length;
+  }
+
+  bool countsTowardConfirmedEarnings(TripModel trip) =>
+      _isCompletedStatus(trip.status);
 
   int completedTrips({String? driverId}) {
     final source = driverId == null
@@ -154,7 +211,22 @@ class TripService {
     _trips.clear();
   }
 
+  Iterable<TripModel> _filteredTrips({
+    String? driverId,
+    required bool confirmedOnly,
+  }) {
+    final source = driverId == null
+        ? _trips
+        : _trips.where((trip) => trip.driverId == driverId);
+    if (confirmedOnly) {
+      return source.where((trip) => _isCompletedStatus(trip.status));
+    }
+    return source.where((trip) => trip.status != "rejected");
+  }
+
   bool _isCompletedStatus(String status) {
-    return status == "completed" || status == "accepted";
+    return status == "completed" ||
+        status == "accepted" ||
+        status == "picked_up";
   }
 }

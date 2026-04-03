@@ -2,10 +2,14 @@ import "dart:async";
 
 import "package:flutter/material.dart";
 import "package:geolocator/geolocator.dart";
+import "package:latlong2/latlong.dart";
 
 import "../models/driver_model.dart";
 import "../models/location_model.dart";
+import "../models/trip_model.dart";
+import "../models/user_model.dart";
 import "../services/location_service.dart";
+import "../services/map_service.dart";
 import "../services/socket_service.dart";
 import "trip_provider.dart";
 
@@ -13,15 +17,18 @@ class DriverProvider extends ChangeNotifier {
   DriverProvider({
     required SocketService socketService,
     required LocationService locationService,
+    required MapService mapService,
     required TripProvider tripProvider,
   }) : _socketService = socketService,
        _locationService = locationService,
+       _mapService = mapService,
        _tripProvider = tripProvider {
     _bindSocketListeners();
   }
 
   final SocketService _socketService;
   final LocationService _locationService;
+  final MapService _mapService;
   final TripProvider _tripProvider;
 
   DriverModel? _self;
@@ -33,15 +40,39 @@ class DriverProvider extends ChangeNotifier {
   String? _lastRegistrationKey;
   String? _sessionRole;
   String? _sessionName;
+  DateTime? _lastNavigationRefreshAt;
+  bool _navigationRefreshInFlight = false;
 
   DriverModel? get self => _self;
   List<DriverModel> get drivers => List.unmodifiable(_drivers);
   List<LocationModel> pathForDriver(String driverId) =>
       List.unmodifiable(_pathByDriver[driverId] ?? <LocationModel>[]);
 
-  Future<void> connectDriver({required String id, required String name}) async {
+  Future<void> connectDriver({
+    required String id,
+    required String name,
+    String? email,
+    String? phoneNumber,
+    String? address,
+    String? governmentId,
+    String? avatarPath,
+    String? languageCode,
+    String? mapThemeMode,
+    String? vehicleMake,
+    String? vehicleModel,
+    String? vehicleColor,
+    String? vehiclePlate,
+    String? vehicleYear,
+  }) async {
     final initialLocation = await _resolveInitialLocation();
-    final profile = _buildDriverProfile(id: id, name: name);
+    final profile = _buildDriverProfile(
+      id: id,
+      name: name,
+      email: email,
+      phoneNumber: phoneNumber,
+      address: address,
+      governmentId: governmentId,
+    );
     final safeInitialLocation = initialLocation ?? _emptyLocation();
     final initialStatus = initialLocation == null
         ? "Ubicacion pendiente"
@@ -55,6 +86,14 @@ class DriverProvider extends ChangeNotifier {
       phoneNumber: profile.phoneNumber,
       address: profile.address,
       governmentId: profile.governmentId,
+      avatarPath: avatarPath,
+      languageCode: languageCode ?? "es",
+      mapThemeMode: mapThemeMode ?? "flow",
+      vehicleMake: _cleanValue(vehicleMake),
+      vehicleModel: _cleanValue(vehicleModel),
+      vehicleColor: _cleanValue(vehicleColor),
+      vehiclePlate: _cleanValue(vehiclePlate),
+      vehicleYear: _cleanValue(vehicleYear),
       location: safeInitialLocation,
       status: initialStatus,
     );
@@ -101,15 +140,21 @@ class DriverProvider extends ChangeNotifier {
   _DriverProfile _buildDriverProfile({
     required String id,
     required String name,
+    String? email,
+    String? phoneNumber,
+    String? address,
+    String? governmentId,
   }) {
     final shortId = id.length <= 6 ? id : id.substring(id.length - 6);
     final slug = name.toLowerCase().replaceAll(RegExp(r"[^a-z0-9]+"), "");
     return _DriverProfile(
       legalName: name,
-      email: "${slug.isEmpty ? 'driver$shortId' : slug}@atob.app",
-      phoneNumber: "+1 804 555 ${shortId.padLeft(4, "0").substring(2)}",
-      address: "Virginia driver zone",
-      governmentId: "DRV-$shortId",
+      email: _cleanValue(email) ?? "${slug.isEmpty ? 'driver$shortId' : slug}@atob.app",
+      phoneNumber:
+          _cleanValue(phoneNumber) ??
+          "+1 804 555 ${shortId.padLeft(4, "0").substring(2)}",
+      address: _cleanValue(address) ?? "Virginia driver zone",
+      governmentId: _cleanValue(governmentId) ?? "DRV-$shortId",
     );
   }
 
@@ -184,8 +229,11 @@ class DriverProvider extends ChangeNotifier {
       if (id == null || id.isEmpty) continue;
       final name = item["name"]?.toString().trim();
       if (name == null || name.isEmpty) continue;
-      final status = item["status"]?.toString() ?? "Disponible";
-      final tripId = item["currentTripId"]?.toString();
+      final status = _normalizeOperationalStatus(
+        item["status"]?.toString(),
+        fallback: existingById[id]?.status ?? "Disponible (Visible)",
+      );
+      final tripId = _stringValue(item["currentTripId"]);
       final location = _locationFromPayload(item["location"], id);
 
       final existing = existingById[id];
@@ -223,6 +271,11 @@ class DriverProvider extends ChangeNotifier {
           phoneNumber: item["phoneNumber"]?.toString() ?? "+1 804 555 0000",
           address: item["address"]?.toString() ?? "Operational area",
           governmentId: item["governmentId"]?.toString() ?? "DRV-$id",
+          vehicleMake: _stringValue(item["vehicleMake"]),
+          vehicleModel: _stringValue(item["vehicleModel"]),
+          vehicleColor: _stringValue(item["vehicleColor"]),
+          vehiclePlate: _stringValue(item["vehiclePlate"]),
+          vehicleYear: _stringValue(item["vehicleYear"]),
           location: location,
           status: status,
           currentTripId: tripId,
@@ -259,9 +312,11 @@ class DriverProvider extends ChangeNotifier {
 
     final latitude = (payload["latitude"] as num?)?.toDouble();
     final longitude = (payload["longitude"] as num?)?.toDouble();
-    final status = payload["status"]?.toString();
-
     final index = _drivers.indexWhere((d) => d.id == driverId);
+    final status = _normalizeOperationalStatus(
+      payload["status"]?.toString(),
+      fallback: index >= 0 ? _drivers[index].status : "Disponible (Visible)",
+    );
     final base = index >= 0
         ? _drivers[index]
         : DriverModel(
@@ -275,8 +330,13 @@ class DriverProvider extends ChangeNotifier {
             address: payload["address"]?.toString() ?? "Operational area",
             governmentId:
                 payload["governmentId"]?.toString() ?? "DRV-$driverId",
+            vehicleMake: _stringValue(payload["vehicleMake"]),
+            vehicleModel: _stringValue(payload["vehicleModel"]),
+            vehicleColor: _stringValue(payload["vehicleColor"]),
+            vehiclePlate: _stringValue(payload["vehiclePlate"]),
+            vehicleYear: _stringValue(payload["vehicleYear"]),
             location: _emptyLocation(),
-            status: "Disponible",
+            status: "Disponible (Visible)",
             isOnline: true,
           );
     final nextLocation = (latitude != null && longitude != null)
@@ -292,7 +352,7 @@ class DriverProvider extends ChangeNotifier {
     final next = base.copyWith(
       location: nextLocation,
       intercomId: payload["intercomId"]?.toString() ?? base.intercomId,
-      status: status ?? base.status,
+      status: status,
       isOnline: true,
     );
 
@@ -330,26 +390,40 @@ class DriverProvider extends ChangeNotifier {
 
     final tripId = _stringValue(map["id"] ?? map["tripId"]);
     final tripStatus = _stringValue(map["status"])?.toLowerCase();
-    final nextStatus = switch (tripStatus) {
-      "accepted" => "En ruta",
-      "completed" => "Disponible (Visible)",
-      "rejected" => "Disponible",
-      _ => "Asignado",
-    };
-    final nextTripId = (tripStatus == "rejected" || tripStatus == "completed")
+    final nextTripId =
+        (tripStatus == "rejected" || tripStatus == "completed")
         ? null
         : tripId;
 
-    _self = _self?.copyWith(status: nextStatus, currentTripId: nextTripId);
+    _self = _self?.copyWith(currentTripId: nextTripId);
     if (_self != null) {
       _upsertDriver(_self!);
     }
     notifyListeners();
   }
 
-  void startAssignedTrip(String tripId) {
+  Future<void> startAssignedTrip(String tripId) async {
     _tripProvider.setTripStatus(tripId: tripId, status: "accepted");
-    _self = _self?.copyWith(status: "En ruta", currentTripId: tripId);
+    _self = _self?.copyWith(currentTripId: tripId);
+    if (_self != null) {
+      _recordPath(_self!.id, _self!.location, reset: true);
+      _upsertDriver(_self!);
+      _socketService.emit("driver:location:update", {
+        "driverId": _self!.id,
+        "intercomId": _self!.intercomId,
+        "name": _self!.name,
+        "status": _self!.status,
+        "currentTripId": tripId,
+        ..._self!.location.toJson(),
+      });
+    }
+    await _refreshNavigationRouteForTrip(tripId);
+    notifyListeners();
+  }
+
+  Future<void> markPassengerPickedUp(String tripId) async {
+    _tripProvider.setTripStatus(tripId: tripId, status: "picked_up");
+    _self = _self?.copyWith(currentTripId: tripId);
     if (_self != null) {
       _upsertDriver(_self!);
       _socketService.emit("driver:location:update", {
@@ -361,16 +435,15 @@ class DriverProvider extends ChangeNotifier {
         ..._self!.location.toJson(),
       });
     }
+    await _refreshNavigationRouteForTrip(tripId);
     notifyListeners();
   }
 
   void completeCurrentTrip(String tripId) {
     _tripProvider.setTripStatus(tripId: tripId, status: "completed");
-    final current = (_self?.status ?? "").toLowerCase();
-    final nextStatus = current.contains("invisible") || current.contains("no ")
-        ? "No disponible (Invisible)"
-        : "Disponible (Visible)";
-    _self = _self?.copyWith(status: nextStatus, currentTripId: null);
+    _lastNavigationRefreshAt = null;
+    _navigationRefreshInFlight = false;
+    _self = _self?.copyWith(currentTripId: null);
     if (_self != null) {
       _upsertDriver(_self!);
       _socketService.emit("driver:location:update", {
@@ -398,6 +471,7 @@ class DriverProvider extends ChangeNotifier {
         ...location.toJson(),
       });
       _recordPath(_self!.id, location);
+      unawaited(_maybeRefreshNavigationRoute(location));
       notifyListeners();
     });
   }
@@ -434,7 +508,6 @@ class DriverProvider extends ChangeNotifier {
     final status = accepted ? "accepted" : "rejected";
     _tripProvider.setTripStatus(tripId: tripId, status: status);
     _self = _self?.copyWith(
-      status: accepted ? "En camino" : "Disponible",
       currentTripId: accepted ? tripId : null,
     );
     if (_self != null) {
@@ -452,13 +525,17 @@ class DriverProvider extends ChangeNotifier {
 
   void setOperationalStatus(String status) {
     if (_self == null) return;
-    _self = _self!.copyWith(status: status);
+    final nextStatus = _normalizeOperationalStatus(
+      status,
+      fallback: _self!.status,
+    );
+    _self = _self!.copyWith(status: nextStatus);
     _upsertDriver(_self!);
     _socketService.emit("driver:location:update", {
       "driverId": _self!.id,
       "intercomId": _self!.intercomId,
       "name": _self!.name,
-      "status": status,
+      "status": nextStatus,
       ..._self!.location.toJson(),
     });
     notifyListeners();
@@ -474,12 +551,140 @@ class DriverProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void syncProfileFromUser(UserModel user) {
+    if (_self == null) return;
+    final next = _self!.copyWith(
+      name: _cleanValue(user.name) ?? _self!.name,
+      legalName: _cleanValue(user.legalName) ?? _self!.legalName,
+      email: _cleanValue(user.email) ?? _self!.email,
+      phoneNumber: _cleanValue(user.phoneNumber) ?? _self!.phoneNumber,
+      address: _cleanValue(user.address) ?? _self!.address,
+      governmentId: _cleanValue(user.governmentId) ?? _self!.governmentId,
+      avatarPath: _cleanValue(user.avatarPath) ?? _self!.avatarPath,
+      languageCode: _cleanValue(user.languageCode) ?? _self!.languageCode,
+      mapThemeMode: _cleanValue(user.mapThemeMode) ?? _self!.mapThemeMode,
+      vehicleMake: _cleanValue(user.vehicleMake),
+      vehicleModel: _cleanValue(user.vehicleModel),
+      vehicleColor: _cleanValue(user.vehicleColor),
+      vehiclePlate: _cleanValue(user.vehiclePlate),
+      vehicleYear: _cleanValue(user.vehicleYear),
+    );
+    _self = next;
+    _sessionName = next.name;
+    _upsertDriver(next);
+    _registerSession(role: "driver", name: next.name);
+    _socketService.emit("driver:location:update", {
+      "driverId": next.id,
+      "intercomId": next.intercomId,
+      "name": next.name,
+      "status": next.status,
+      "email": next.email,
+      "phoneNumber": next.phoneNumber,
+      "address": next.address,
+      "governmentId": next.governmentId,
+      "avatarPath": next.avatarPath,
+      "vehicleMake": next.vehicleMake,
+      "vehicleModel": next.vehicleModel,
+      "vehicleColor": next.vehicleColor,
+      "vehiclePlate": next.vehiclePlate,
+      "vehicleYear": next.vehicleYear,
+      ...next.location.toJson(),
+    });
+    notifyListeners();
+  }
+
   void clearAssignedTrip() {
     if (_self == null) return;
-    final status = _self!.status == "En camino" ? "Disponible" : _self!.status;
-    _self = _self!.copyWith(currentTripId: null, status: status);
+    _self = _self!.copyWith(currentTripId: null);
     _upsertDriver(_self!);
     notifyListeners();
+  }
+
+  Future<void> _maybeRefreshNavigationRoute(LocationModel current) async {
+    final self = _self;
+    final tripId = self?.currentTripId;
+    if (self == null || tripId == null) return;
+    final trip = _tripProvider.byId(tripId);
+    if (trip == null) return;
+    if (trip.status != "accepted" && trip.status != "picked_up") return;
+    if (_navigationRefreshInFlight) return;
+
+    final now = DateTime.now();
+    final last = _lastNavigationRefreshAt;
+    if (last != null && now.difference(last) < const Duration(seconds: 8)) {
+      return;
+    }
+
+    if (!_shouldRefreshForDeviation(current, trip)) return;
+    await _refreshNavigationRouteForTrip(tripId, currentLocation: current);
+  }
+
+  bool _shouldRefreshForDeviation(LocationModel current, TripModel trip) {
+    final route = trip.routePoints;
+    if (route.length < 2) return true;
+    final here = LatLng(current.latitude, current.longitude);
+    final distance = Distance();
+    var closestMeters = double.infinity;
+    for (final point in route) {
+      final meters = distance.as(
+        LengthUnit.Meter,
+        here,
+        LatLng(point.latitude, point.longitude),
+      );
+      if (meters < closestMeters) {
+        closestMeters = meters;
+      }
+    }
+    return closestMeters > 70;
+  }
+
+  Future<void> _refreshNavigationRouteForTrip(
+    String tripId, {
+    LocationModel? currentLocation,
+  }) async {
+    final trip = _tripProvider.byId(tripId);
+    final self = _self;
+    if (trip == null || self == null) return;
+    final current = currentLocation ?? self.location;
+    if ((current.latitude.abs() <= 0.001 && current.longitude.abs() <= 0.001)) {
+      return;
+    }
+
+    final destination = trip.destinationLocation;
+    if (destination == null) return;
+    final routeStops = <LatLng>[
+      LatLng(current.latitude, current.longitude),
+    ];
+    if (trip.status == "accepted") {
+      final origin = trip.originLocation;
+      if (origin != null) {
+        routeStops.add(LatLng(origin.latitude, origin.longitude));
+      }
+    }
+    routeStops.add(LatLng(destination.latitude, destination.longitude));
+
+    _navigationRefreshInFlight = true;
+    try {
+      final estimate = await _mapService.calculateRouteChain(stops: routeStops);
+      if (estimate == null) return;
+      _tripProvider.updateTripNavigation(
+        tripId: tripId,
+        distanceMiles: trip.distanceMiles,
+        durationMinutes: estimate.durationMinutes,
+        fareUsd: trip.fareUsd,
+        routePoints: estimate.path
+            .map(
+              (point) => LocationModel(
+                latitude: point.latitude,
+                longitude: point.longitude,
+              ),
+            )
+            .toList(),
+      );
+      _lastNavigationRefreshAt = DateTime.now();
+    } finally {
+      _navigationRefreshInFlight = false;
+    }
   }
 
   Future<void> disconnect() async {
@@ -569,6 +774,27 @@ class DriverProvider extends ChangeNotifier {
     if (value == null) return null;
     final text = value.toString().trim();
     return text.isEmpty ? null : text;
+  }
+
+  String? _cleanValue(String? value) {
+    final text = (value ?? "").trim();
+    return text.isEmpty ? null : text;
+  }
+
+  String _normalizeOperationalStatus(String? raw, {required String fallback}) {
+    final value = (raw ?? "").trim();
+    if (value.isEmpty) return fallback;
+    final lower = value.toLowerCase();
+    if (lower.contains("ubicacion pendiente")) {
+      return "Ubicacion pendiente";
+    }
+    if (lower.startsWith("disponible")) {
+      return "Disponible (Visible)";
+    }
+    if (lower.contains("invisible") || lower.contains("no disponible")) {
+      return "No disponible (Invisible)";
+    }
+    return fallback;
   }
 }
 
