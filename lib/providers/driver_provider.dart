@@ -624,6 +624,8 @@ class DriverProvider extends ChangeNotifier {
     if (route.length < 2) return true;
     final here = LatLng(current.latitude, current.longitude);
     final distance = Distance();
+    final routeStart = LatLng(route.first.latitude, route.first.longitude);
+    final startMeters = distance.as(LengthUnit.Meter, here, routeStart);
     var closestMeters = double.infinity;
     for (final point in route) {
       final meters = distance.as(
@@ -635,7 +637,7 @@ class DriverProvider extends ChangeNotifier {
         closestMeters = meters;
       }
     }
-    return closestMeters > 70;
+    return startMeters > 32 || closestMeters > 55;
   }
 
   Future<void> _refreshNavigationRouteForTrip(
@@ -680,6 +682,7 @@ class DriverProvider extends ChangeNotifier {
               ),
             )
             .toList(),
+        routeSteps: estimate.steps,
       );
       _lastNavigationRefreshAt = DateTime.now();
     } finally {

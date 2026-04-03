@@ -17,6 +17,7 @@ class TripService {
     double durationMinutes = 0,
     double fareUsd = 0,
     List<LocationModel> routePoints = const <LocationModel>[],
+    List<RouteStepModel> routeSteps = const <RouteStepModel>[],
     LocationModel? originLocation,
     LocationModel? destinationLocation,
   }) {
@@ -31,6 +32,7 @@ class TripService {
       durationMinutes: durationMinutes,
       fareUsd: fareUsd,
       routePoints: routePoints,
+      routeSteps: routeSteps,
       originLocation: originLocation,
       destinationLocation: destinationLocation,
     );
@@ -69,6 +71,7 @@ class TripService {
     double? durationMinutes,
     double? fareUsd,
     List<LocationModel>? routePoints,
+    List<RouteStepModel>? routeSteps,
     LocationModel? originLocation,
     LocationModel? destinationLocation,
   }) {
@@ -80,6 +83,7 @@ class TripService {
       durationMinutes: durationMinutes,
       fareUsd: fareUsd,
       routePoints: routePoints,
+      routeSteps: routeSteps,
       originLocation: originLocation,
       destinationLocation: destinationLocation,
     );

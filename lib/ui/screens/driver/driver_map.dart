@@ -1,5 +1,5 @@
 import "dart:async";
-import "dart:math";
+import "dart:math" as math;
 
 import "package:flutter/material.dart";
 import "package:flutter_compass/flutter_compass.dart";
@@ -7,6 +7,7 @@ import "package:flutter_map/flutter_map.dart";
 import "package:latlong2/latlong.dart";
 import "package:provider/provider.dart";
 
+import "../../../models/trip_model.dart";
 import "../../../providers/driver_provider.dart";
 import "../../../providers/map_ui_provider.dart";
 import "../../../providers/trip_provider.dart";
@@ -108,9 +109,8 @@ class _DriverMapState extends State<DriverMap> {
   }
 
   void _focusNavigation(List<LatLng> path, LatLng currentPoint) {
-    final focus = _navigationFocusPoint(path, currentPoint);
     _centerOnWithRotation(
-      focus,
+      currentPoint,
       zoomOverride: _zoom < 18.15 ? 18.15 : _zoom,
       rotationOverride: _mapRotationForHeading(_deviceHeading),
     );
@@ -143,8 +143,19 @@ class _DriverMapState extends State<DriverMap> {
             MapThemeMode.satellite => AppConstants.tileSatelliteUrl,
           }
         : null;
+    final layers = <Widget>[
+      TileLayer(
+        urlTemplate: AppConstants.tileFallbackUrl,
+        fallbackUrl: AppConstants.tileFallbackBackupUrl,
+        retinaMode: false,
+        userAgentPackageName: "com.example.atob_app",
+        keepBuffer: 1,
+        panBuffer: 0,
+        maxNativeZoom: 19,
+      ),
+    ];
     if (mapboxUrl != null) {
-      return [
+      layers.add(
         TileLayer(
           urlTemplate: mapboxUrl,
           fallbackUrl: AppConstants.tileFallbackBackupUrl,
@@ -156,19 +167,9 @@ class _DriverMapState extends State<DriverMap> {
           panBuffer: 0,
           maxNativeZoom: 19,
         ),
-      ];
+      );
     }
-    return [
-      TileLayer(
-        urlTemplate: AppConstants.tileFallbackUrl,
-        fallbackUrl: AppConstants.tileFallbackBackupUrl,
-        retinaMode: false,
-        userAgentPackageName: "com.example.atob_app",
-        keepBuffer: 1,
-        panBuffer: 0,
-        maxNativeZoom: 19,
-      ),
-    ];
+    return layers;
   }
 
   bool _shouldRecenter(LatLng point) {
@@ -178,38 +179,53 @@ class _DriverMapState extends State<DriverMap> {
     return meters > 20;
   }
 
-  LatLng _navigationFocusPoint(List<LatLng> path, LatLng currentPoint) {
-    if (path.isEmpty) return currentPoint;
-    var nearestIndex = 0;
-    var nearestMeters = double.infinity;
-    for (var i = 0; i < path.length; i++) {
-      final meters = _distance.as(LengthUnit.Meter, currentPoint, path[i]);
-      if (meters < nearestMeters) {
-        nearestMeters = meters;
-        nearestIndex = i;
+  _RouteProgress _buildRouteProgress(List<LatLng> path, LatLng currentPoint) {
+    if (path.isEmpty) {
+      return const _RouteProgress(
+        remainingPath: <LatLng>[],
+        traveledPath: <LatLng>[],
+        nearestIndex: 0,
+        nearestMeters: 0,
+      );
+    }
+    final nearestIndex = _nearestRouteIndex(path, currentPoint);
+    final nearestMeters = _distance.as(
+      LengthUnit.Meter,
+      currentPoint,
+      path[nearestIndex],
+    );
+
+    final traveled = path.take(nearestIndex + 1).toList();
+    final remaining = path.skip(nearestIndex).toList();
+
+    if (nearestMeters <= 28) {
+      if (traveled.isNotEmpty) {
+        traveled[traveled.length - 1] = currentPoint;
+      }
+      if (remaining.isNotEmpty) {
+        remaining[0] = currentPoint;
       }
     }
-    final aheadIndex = min(path.length - 1, nearestIndex + 4);
-    final ahead = path[aheadIndex];
-    return LatLng(
-      (currentPoint.latitude * 0.58) + (ahead.latitude * 0.42),
-      (currentPoint.longitude * 0.58) + (ahead.longitude * 0.42),
+
+    return _RouteProgress(
+      traveledPath: _dedupeRoutePoints(traveled),
+      remainingPath: _dedupeRoutePoints(remaining),
+      nearestIndex: nearestIndex,
+      nearestMeters: nearestMeters,
     );
   }
 
-  List<LatLng> _remainingRoute(List<LatLng> path, LatLng currentPoint) {
-    if (path.length < 2) return path;
+  int _nearestRouteIndex(List<LatLng> path, LatLng point) {
     var nearestIndex = 0;
     var nearestMeters = double.infinity;
     for (var i = 0; i < path.length; i++) {
-      final meters = _distance.as(LengthUnit.Meter, currentPoint, path[i]);
+      final meters = _distance.as(LengthUnit.Meter, point, path[i]);
       if (meters < nearestMeters) {
         nearestMeters = meters;
         nearestIndex = i;
       }
     }
-    final remaining = <LatLng>[currentPoint, ...path.skip(nearestIndex)];
-    return _dedupeRoutePoints(remaining);
+    return nearestIndex;
   }
 
   List<LatLng> _dedupeRoutePoints(List<LatLng> points) {
@@ -265,7 +281,7 @@ class _DriverMapState extends State<DriverMap> {
   double _bearingBetween(LatLng from, LatLng to) {
     final deltaLng = (to.longitude - from.longitude);
     final deltaLat = (to.latitude - from.latitude);
-    return (90 - (atan2(deltaLat, deltaLng) * 180 / pi) + 360) % 360;
+    return (90 - (math.atan2(deltaLat, deltaLng) * 180 / math.pi) + 360) % 360;
   }
 
   double? _mapRotationForHeading(double? heading) {
@@ -328,7 +344,7 @@ class _DriverMapState extends State<DriverMap> {
     final segmentMeters =
         _polylineMeters(routePath.take(targetIndex + 1).toList());
     final ratio = (segmentMeters / totalMeters).clamp(0.05, 1.0);
-    return max(1, (totalMinutes * ratio).round());
+    return math.max(1, (totalMinutes * ratio).round());
   }
 
   double _polylineMeters(List<LatLng> points) {
@@ -338,6 +354,121 @@ class _DriverMapState extends State<DriverMap> {
       meters += _distance.as(LengthUnit.Meter, points[i - 1], points[i]);
     }
     return meters;
+  }
+
+  double _routeMetersBetweenIndices(
+    List<LatLng> routePath,
+    int startIndex,
+    int endIndex,
+  ) {
+    if (routePath.length < 2) return 0;
+    final safeStart = startIndex.clamp(0, routePath.length - 1);
+    final safeEnd = endIndex.clamp(safeStart, routePath.length - 1);
+    if (safeEnd <= safeStart) return 0;
+    return _polylineMeters(routePath.sublist(safeStart, safeEnd + 1));
+  }
+
+  _UpcomingStepPreview? _resolveUpcomingStep(
+    List<RouteStepModel> steps,
+    List<LatLng> routePath,
+    int currentRouteIndex,
+    LatLng currentPoint,
+  ) {
+    if (steps.isEmpty || routePath.length < 2) return null;
+
+    _UpcomingStepPreview? fallback;
+    for (final step in steps) {
+      final location = step.location;
+      if (location == null) continue;
+      final stepPoint = LatLng(location.latitude, location.longitude);
+      final stepIndex = _nearestRouteIndex(routePath, stepPoint);
+      final routeMeters = _routeMetersBetweenIndices(
+        routePath,
+        currentRouteIndex,
+        stepIndex,
+      );
+      final straightMeters = _distance.as(LengthUnit.Meter, currentPoint, stepPoint);
+      final effectiveMeters = routeMeters > 1 ? routeMeters : straightMeters;
+      final preview = _UpcomingStepPreview(
+        step: step,
+        distanceMeters: effectiveMeters,
+      );
+      if (effectiveMeters >= 18 && stepIndex >= currentRouteIndex) {
+        return preview;
+      }
+      fallback ??= preview;
+    }
+    return fallback;
+  }
+
+  String _distanceLabel(double meters, bool isEnglish) {
+    if (meters < 120) {
+      return isEnglish ? "${meters.round()} ft" : "${meters.round()} m";
+    }
+    final miles = meters / 1609.344;
+    if (miles < 0.2) {
+      final feet = meters * 3.28084;
+      return "${feet.round()} ft";
+    }
+    return "${miles.toStringAsFixed(miles < 1 ? 1 : 0)} mi";
+  }
+
+  String _nextStepLabel(
+    _UpcomingStepPreview preview,
+    String Function({required String es, required String en}) t,
+  ) {
+    final step = preview.step;
+    final road = (step.roadName ?? "").trim();
+    final distanceText = _distanceLabel(preview.distanceMeters, context.isEnglish);
+    final modifier = (step.maneuverModifier ?? "").toLowerCase();
+    final type = (step.maneuverType ?? "").toLowerCase();
+
+    if (type == "arrive") {
+      return t(
+        es: "Llegada en $distanceText",
+        en: "Arrive in $distanceText",
+      );
+    }
+
+    if (type == "turn" ||
+        type == "fork" ||
+        type == "merge" ||
+        type == "off ramp" ||
+        type == "on ramp" ||
+        type == "roundabout") {
+      final direction = switch (modifier) {
+        "left" => t(es: "izquierda", en: "left"),
+        "right" => t(es: "derecha", en: "right"),
+        "slight left" => t(es: "ligeramente a la izquierda", en: "slight left"),
+        "slight right" => t(es: "ligeramente a la derecha", en: "slight right"),
+        "sharp left" => t(es: "cerrado a la izquierda", en: "sharp left"),
+        "sharp right" => t(es: "cerrado a la derecha", en: "sharp right"),
+        "uturn" => t(es: "retorno", en: "u-turn"),
+        _ => t(es: "frente", en: "ahead"),
+      };
+      if (road.isNotEmpty) {
+        return t(
+          es: "En $distanceText gira a la $direction hacia $road",
+          en: "In $distanceText turn $direction onto $road",
+        );
+      }
+      return t(
+        es: "En $distanceText gira a la $direction",
+        en: "In $distanceText turn $direction",
+      );
+    }
+
+    if (road.isNotEmpty) {
+      return t(
+        es: "Sigue por $road durante $distanceText",
+        en: "Continue on $road for $distanceText",
+      );
+    }
+
+    return t(
+      es: "Continua durante $distanceText",
+      en: "Continue for $distanceText",
+    );
   }
 
   @override
@@ -383,11 +514,13 @@ class _DriverMapState extends State<DriverMap> {
         : activeTrip.routePoints
               .map((p) => LatLng(p.latitude, p.longitude))
               .toList();
-    final routePath = fullRoutePath.length > 1
-        ? _remainingRoute(fullRoutePath, point)
-        : fullRoutePath;
+    final routeProgress = fullRoutePath.length > 1
+        ? _buildRouteProgress(fullRoutePath, point)
+        : null;
+    final routePath = routeProgress?.remainingPath ?? fullRoutePath;
+    final traveledPath = routeProgress?.traveledPath ?? const <LatLng>[];
     final routeFocusPoint = hasStartedTrip && routePath.length > 1
-        ? _navigationFocusPoint(routePath, point)
+        ? point
         : point;
     final routeFocusKey = activeTrip == null
         ? null
@@ -421,6 +554,17 @@ class _DriverMapState extends State<DriverMap> {
             routePath,
             destinationPoint,
             activeTrip.durationMinutes,
+          )
+        : null;
+    final upcomingStep =
+        activeTrip != null &&
+            routeProgress != null &&
+            activeTrip.routeSteps.isNotEmpty
+        ? _resolveUpcomingStep(
+            activeTrip.routeSteps,
+            fullRoutePath,
+            routeProgress.nearestIndex,
+            point,
           )
         : null;
 
@@ -476,6 +620,18 @@ class _DriverMapState extends State<DriverMap> {
                 if (routePath.length > 1)
                   PolylineLayer(
                     polylines: [
+                      if (traveledPath.length > 1)
+                        Polyline(
+                          points: traveledPath,
+                          strokeWidth: 8.6,
+                          color: const Color(0xB06B2D00),
+                        ),
+                      if (traveledPath.length > 1)
+                        Polyline(
+                          points: traveledPath,
+                          strokeWidth: 5.9,
+                          color: const Color(0xFFFF9B2F),
+                        ),
                       Polyline(
                         points: routePath,
                         strokeWidth: 8.4,
@@ -490,6 +646,28 @@ class _DriverMapState extends State<DriverMap> {
                   ),
                 MarkerLayer(
                   markers: [
+                    if (pickupPoint != null)
+                      Marker(
+                        point: pickupPoint,
+                        width: 48,
+                        height: 48,
+                        child: _RouteStopMarker(
+                          icon: Icons.train_rounded,
+                          color: activeTrip?.status == "picked_up"
+                              ? const Color(0x8899A2B5)
+                              : const Color(0xFF74B9FF),
+                        ),
+                      ),
+                    if (destinationPoint != null)
+                      Marker(
+                        point: destinationPoint,
+                        width: 48,
+                        height: 48,
+                        child: const _RouteStopMarker(
+                          icon: Icons.home_rounded,
+                          color: Color(0xFFFFD166),
+                        ),
+                      ),
                     Marker(
                       point: point,
                       width: 88,
@@ -552,6 +730,13 @@ class _DriverMapState extends State<DriverMap> {
                         en:
                             "Destination ${etaClock(DateTime.now().add(Duration(minutes: destinationEtaMinutes)))}",
                       ),
+                    ),
+                  ],
+                  if (upcomingStep != null) ...[
+                    const SizedBox(height: 8),
+                    _NextTurnChip(
+                      icon: Icons.turn_slight_right_rounded,
+                      label: _nextStepLabel(upcomingStep, t),
                     ),
                   ],
                 ],
@@ -789,6 +974,78 @@ class _CompassChip extends StatelessWidget {
   }
 }
 
+class _NextTurnChip extends StatelessWidget {
+  const _NextTurnChip({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 280),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xE1181B20),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0x3EFF9B2F)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            size: 15,
+            color: const Color(0xFFFFB257),
+          ),
+          const SizedBox(width: 7),
+          Flexible(
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontWeight: FontWeight.w800,
+                fontSize: 12,
+                height: 1.15,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RouteStopMarker extends StatelessWidget {
+  const _RouteStopMarker({required this.icon, required this.color});
+
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.center,
+      child: Container(
+        width: 34,
+        height: 34,
+        decoration: BoxDecoration(
+          color: const Color(0xF3131313),
+          shape: BoxShape.circle,
+          border: Border.all(color: color, width: 2),
+          boxShadow: [
+            BoxShadow(
+              color: color.withValues(alpha: 0.28),
+              blurRadius: 14,
+              spreadRadius: 0.5,
+            ),
+          ],
+        ),
+        child: Icon(icon, size: 18, color: color),
+      ),
+    );
+  }
+}
+
 class _AvailabilityDock extends StatelessWidget {
   const _AvailabilityDock({
     required this.isVisible,
@@ -899,4 +1156,28 @@ class _AvailabilityDock extends StatelessWidget {
       ),
     );
   }
+}
+
+class _RouteProgress {
+  const _RouteProgress({
+    required this.remainingPath,
+    required this.traveledPath,
+    required this.nearestIndex,
+    required this.nearestMeters,
+  });
+
+  final List<LatLng> remainingPath;
+  final List<LatLng> traveledPath;
+  final int nearestIndex;
+  final double nearestMeters;
+}
+
+class _UpcomingStepPreview {
+  const _UpcomingStepPreview({
+    required this.step,
+    required this.distanceMeters,
+  });
+
+  final RouteStepModel step;
+  final double distanceMeters;
 }

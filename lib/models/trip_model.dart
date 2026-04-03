@@ -1,5 +1,69 @@
 import "location_model.dart";
 
+class RouteStepModel {
+  const RouteStepModel({
+    required this.instruction,
+    required this.distanceMeters,
+    required this.durationSeconds,
+    this.roadName,
+    this.maneuverType,
+    this.maneuverModifier,
+    this.location,
+  });
+
+  final String instruction;
+  final double distanceMeters;
+  final double durationSeconds;
+  final String? roadName;
+  final String? maneuverType;
+  final String? maneuverModifier;
+  final LocationModel? location;
+
+  RouteStepModel copyWith({
+    String? instruction,
+    double? distanceMeters,
+    double? durationSeconds,
+    String? roadName,
+    String? maneuverType,
+    String? maneuverModifier,
+    LocationModel? location,
+  }) {
+    return RouteStepModel(
+      instruction: instruction ?? this.instruction,
+      distanceMeters: distanceMeters ?? this.distanceMeters,
+      durationSeconds: durationSeconds ?? this.durationSeconds,
+      roadName: roadName ?? this.roadName,
+      maneuverType: maneuverType ?? this.maneuverType,
+      maneuverModifier: maneuverModifier ?? this.maneuverModifier,
+      location: location ?? this.location,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    "instruction": instruction,
+    "distanceMeters": distanceMeters,
+    "durationSeconds": durationSeconds,
+    "roadName": roadName,
+    "maneuverType": maneuverType,
+    "maneuverModifier": maneuverModifier,
+    "location": location?.toJson(),
+  };
+
+  factory RouteStepModel.fromJson(Map<String, dynamic> json) {
+    return RouteStepModel(
+      instruction: json["instruction"]?.toString() ?? "",
+      distanceMeters: (json["distanceMeters"] as num?)?.toDouble() ?? 0,
+      durationSeconds: (json["durationSeconds"] as num?)?.toDouble() ?? 0,
+      roadName: json["roadName"]?.toString(),
+      maneuverType: json["maneuverType"]?.toString(),
+      maneuverModifier: json["maneuverModifier"]?.toString(),
+      location: (json["location"] is Map)
+          ? LocationModel.fromJson((json["location"] as Map).cast<String, dynamic>())
+          : null,
+    );
+  }
+}
+
 class TripModel {
   const TripModel({
     required this.id,
@@ -12,6 +76,7 @@ class TripModel {
     this.durationMinutes = 0,
     this.fareUsd = 0,
     this.routePoints = const <LocationModel>[],
+    this.routeSteps = const <RouteStepModel>[],
     this.originLocation,
     this.destinationLocation,
   });
@@ -26,6 +91,7 @@ class TripModel {
   final double durationMinutes;
   final double fareUsd;
   final List<LocationModel> routePoints;
+  final List<RouteStepModel> routeSteps;
   final LocationModel? originLocation;
   final LocationModel? destinationLocation;
 
@@ -40,6 +106,7 @@ class TripModel {
     double? durationMinutes,
     double? fareUsd,
     List<LocationModel>? routePoints,
+    List<RouteStepModel>? routeSteps,
     LocationModel? originLocation,
     LocationModel? destinationLocation,
   }) {
@@ -54,6 +121,7 @@ class TripModel {
       durationMinutes: durationMinutes ?? this.durationMinutes,
       fareUsd: fareUsd ?? this.fareUsd,
       routePoints: routePoints ?? this.routePoints,
+      routeSteps: routeSteps ?? this.routeSteps,
       originLocation: originLocation ?? this.originLocation,
       destinationLocation: destinationLocation ?? this.destinationLocation,
     );
@@ -70,6 +138,7 @@ class TripModel {
     "durationMinutes": durationMinutes,
     "fareUsd": fareUsd,
     "routePoints": routePoints.map((p) => p.toJson()).toList(),
+    "routeSteps": routeSteps.map((p) => p.toJson()).toList(),
     "originLocation": originLocation?.toJson(),
     "destinationLocation": destinationLocation?.toJson(),
   };
@@ -93,6 +162,12 @@ class TripModel {
               .map((p) => LocationModel.fromJson(p.cast<String, dynamic>()))
               .toList() ??
           const <LocationModel>[],
+      routeSteps:
+          (json["routeSteps"] as List?)
+              ?.whereType<Map>()
+              .map((p) => RouteStepModel.fromJson(p.cast<String, dynamic>()))
+              .toList() ??
+          const <RouteStepModel>[],
       originLocation: (json["originLocation"] is Map)
           ? LocationModel.fromJson(
               (json["originLocation"] as Map).cast<String, dynamic>(),

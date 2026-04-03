@@ -6,6 +6,7 @@ import "package:provider/provider.dart";
 
 import "../../../models/driver_model.dart";
 import "../../../models/location_model.dart";
+import "../../../models/trip_model.dart";
 import "../../../providers/driver_provider.dart";
 import "../../../providers/trip_provider.dart";
 import "../../../services/map_service.dart";
@@ -117,6 +118,7 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
             (p) => LocationModel(latitude: p.latitude, longitude: p.longitude),
           )
           .toList(),
+      routeSteps: estimate.steps,
       originLocation: LocationModel(
         latitude: _originPoint!.latitude,
         longitude: _originPoint!.longitude,
@@ -271,6 +273,10 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
             navigationEstimate?.path ??
             passengerEstimate?.path ??
             <LatLng>[from, to],
+        steps:
+            navigationEstimate?.steps ??
+            passengerEstimate?.steps ??
+            const <RouteStepModel>[],
       );
       if (!mounted) return estimate;
       setState(() {
@@ -387,6 +393,24 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
     return true;
   }
 
+  List<DriverModel> _uniqueActiveDrivers(List<DriverModel> drivers) {
+    final byKey = <String, DriverModel>{};
+    for (final driver in drivers) {
+      if (!driver.isOnline) continue;
+      final key = _dispatchKeyForDriver(driver);
+      byKey.putIfAbsent(key, () => driver);
+    }
+    return byKey.values.toList();
+  }
+
+  String _dispatchKeyForDriver(DriverModel driver) {
+    final intercom = (driver.intercomId ?? "").trim().toLowerCase();
+    if (intercom.isNotEmpty) return "intercom:$intercom";
+    final email = driver.email.trim().toLowerCase();
+    if (email.isNotEmpty) return "email:$email";
+    return "name:${driver.name.trim().toLowerCase()}";
+  }
+
   String _driverDispatchStatus(DriverModel driver, TripProvider tripProvider) {
     if (!driver.isOnline) {
       return context.txt(es: "Offline", en: "Offline");
@@ -410,13 +434,28 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
     final drivers = context.watch<DriverProvider>().drivers;
     final tripProvider = context.watch<TripProvider>();
     final trips = tripProvider.trips;
-    final activeDrivers = drivers.where((d) => d.isOnline).toList();
+    final activeDrivers = _uniqueActiveDrivers(drivers);
     final assignableCount = activeDrivers
         .where((d) => _isDriverSelectable(d, tripProvider))
         .length;
     final busyCount = activeDrivers
         .where((d) => _isDriverBusy(d, tripProvider))
         .length;
+    DriverModel? selectedDriver;
+    for (final driver in activeDrivers) {
+      if (driver.id == _selectedDriverId) {
+        selectedDriver = driver;
+        break;
+      }
+    }
+    if (selectedDriver == null && _selectedDriverId != null) {
+      for (final driver in activeDrivers) {
+        if (_dispatchKeyForDriver(driver) == _selectedDriverId) {
+          selectedDriver = driver;
+          break;
+        }
+      }
+    }
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -497,42 +536,115 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
                 ),
               ),
             ),
-          ),
-        ...activeDrivers.map((driver) {
-          final selectable = _isDriverSelectable(driver, tripProvider);
-          final viewDriver = driver.copyWith(
-            status: _driverDispatchStatus(driver, tripProvider),
-          );
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Opacity(
-              opacity: selectable ? 1 : 0.56,
-              child: DriverCard(
-                driver: viewDriver,
-                selected: driver.id == _selectedDriverId,
-                onTap: () {
-                  if (!selectable) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          context.isEnglish
-                              ? "${driver.name} is not available for assignment"
-                              : "${driver.name} no esta disponible para asignacion",
-                        ),
+          )
+        else ...[
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    t(es: "Seleccionar driver", en: "Select driver"),
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 10),
+                  DropdownButtonFormField<String>(
+                    initialValue: selectedDriver?.id,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      filled: true,
+                      fillColor: const Color(0xFF101010),
+                      hintText: t(
+                        es: "Selecciona un driver conectado",
+                        en: "Select a connected driver",
                       ),
-                    );
-                    return;
-                  }
-                  setState(() => _selectedDriverId = driver.id);
-                  if (_originPoint != null && _destPoint != null) {
-                    setState(() => _routeEstimate = null);
-                    unawaited(_resolveRouteEstimate());
-                  }
-                },
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: const BorderSide(color: Color(0x26FFFFFF)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: const BorderSide(color: Color(0x26FFFFFF)),
+                      ),
+                    ),
+                    icon: const Icon(Icons.expand_more_rounded),
+                    items: activeDrivers.map((driver) {
+                      final selectable = _isDriverSelectable(driver, tripProvider);
+                      final status = _driverDispatchStatus(driver, tripProvider);
+                      return DropdownMenuItem<String>(
+                        value: driver.id,
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                compactPersonName(driver.name),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              status,
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                color: selectable
+                                    ? const Color(0xFF8DF5C6)
+                                    : Colors.white54,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      DriverModel? driver;
+                      for (final item in activeDrivers) {
+                        if (item.id == value) {
+                          driver = item;
+                          break;
+                        }
+                      }
+                      if (driver == null) return;
+                      if (!_isDriverSelectable(driver, tripProvider)) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              context.isEnglish
+                                  ? "${driver.name} is not available for assignment"
+                                  : "${driver.name} no esta disponible para asignacion",
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+                      setState(() => _selectedDriverId = driver!.id);
+                      if (_originPoint != null && _destPoint != null) {
+                        setState(() => _routeEstimate = null);
+                        unawaited(_resolveRouteEstimate());
+                      }
+                    },
+                  ),
+                  if (selectedDriver != null) ...[
+                    const SizedBox(height: 12),
+                    DriverCard(
+                      driver: selectedDriver.copyWith(
+                        status: _driverDispatchStatus(selectedDriver, tripProvider),
+                      ),
+                      selected: true,
+                      onTap: () {},
+                    ),
+                  ],
+                ],
               ),
             ),
-          );
-        }),
+          ),
+        ],
         const SizedBox(height: 14),
         Text(
           t(es: "Estado de viajes", en: "Trip status"),

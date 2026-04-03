@@ -5,6 +5,8 @@ import "package:latlong2/latlong.dart";
 import "package:shared_preferences/shared_preferences.dart";
 
 import "../models/driver_model.dart";
+import "../models/location_model.dart";
+import "../models/trip_model.dart";
 import "../utils/constants.dart";
 
 class AddressSuggestion {
@@ -36,12 +38,14 @@ class RouteEstimate {
     required this.durationMinutes,
     required this.fareUsd,
     required this.path,
+    this.steps = const <RouteStepModel>[],
   });
 
   final double distanceMiles;
   final double durationMinutes;
   final double fareUsd;
   final List<LatLng> path;
+  final List<RouteStepModel> steps;
 }
 
 class MapService {
@@ -316,7 +320,7 @@ class MapService {
       "&continue_straight=true"
       "&geometries=geojson"
       "&overview=full"
-      "&steps=false"
+      "&steps=true"
       "&access_token=${AppConstants.mapboxToken}",
     );
 
@@ -327,7 +331,7 @@ class MapService {
       request.headers.set(HttpHeaders.userAgentHeader, "AtoB/1.0");
       final response = await request.close().timeout(_networkTimeout);
       if (response.statusCode != 200) {
-        return _fallbackEstimate(origin: origin, destination: destination);
+        return _calculateRouteWithOsrm(origin: origin, destination: destination);
       }
 
       final body = await response
@@ -336,15 +340,15 @@ class MapService {
           .timeout(_networkTimeout);
       final json = jsonDecode(body);
       if (json is! Map<String, dynamic>) {
-        return _fallbackEstimate(origin: origin, destination: destination);
+        return _calculateRouteWithOsrm(origin: origin, destination: destination);
       }
       final routes = json["routes"];
       if (routes is! List || routes.isEmpty) {
-        return _fallbackEstimate(origin: origin, destination: destination);
+        return _calculateRouteWithOsrm(origin: origin, destination: destination);
       }
       final first = routes.first;
       if (first is! Map) {
-        return _fallbackEstimate(origin: origin, destination: destination);
+        return _calculateRouteWithOsrm(origin: origin, destination: destination);
       }
       final map = first.cast<String, dynamic>();
       final meters = (map["distance"] as num?)?.toDouble() ?? 0;
@@ -369,18 +373,20 @@ class MapService {
         }
       }
 
-      if (path.isEmpty) {
-        path.addAll([origin, destination]);
+      if (path.length < 2) {
+        return _calculateRouteWithOsrm(origin: origin, destination: destination);
       }
+      final steps = _extractRouteSteps(map);
 
       return RouteEstimate(
         distanceMiles: miles,
         durationMinutes: seconds / 60,
         fareUsd: fare,
-        path: path,
+        path: _compactPolyline(path),
+        steps: steps,
       );
     } catch (_) {
-      return _fallbackEstimate(origin: origin, destination: destination);
+      return _calculateRouteWithOsrm(origin: origin, destination: destination);
     } finally {
       client.close(force: true);
     }
@@ -407,23 +413,36 @@ class MapService {
       return calculateRoute(origin: cleaned.first, destination: cleaned.last);
     }
 
-    final coords = cleaned
-        .map((point) => "${point.longitude},${point.latitude}")
-        .join(";");
-    if (!AppConstants.hasMapboxToken) {
-      return _calculateRouteChainWithOsrm(stops: cleaned);
+    final mergedPath = <LatLng>[];
+    final mergedSteps = <RouteStepModel>[];
+    var totalMiles = 0.0;
+    var totalMinutes = 0.0;
+    var totalFare = 0.0;
+
+    for (var i = 0; i < cleaned.length - 1; i++) {
+      final leg = await calculateRoute(
+        origin: cleaned[i],
+        destination: cleaned[i + 1],
+      );
+      if (leg == null) return null;
+      totalMiles += leg.distanceMiles;
+      totalMinutes += leg.durationMinutes;
+      totalFare += leg.fareUsd;
+      mergedSteps.addAll(leg.steps);
+      if (mergedPath.isEmpty) {
+        mergedPath.addAll(leg.path);
+      } else {
+        mergedPath.addAll(leg.path.skip(1));
+      }
     }
-    final url = Uri.parse(
-      "https://api.mapbox.com/directions/v5/mapbox/driving/$coords"
-      "?alternatives=false"
-      "&continue_straight=true"
-      "&geometries=geojson"
-      "&overview=full"
-      "&steps=false"
-      "&access_token=${AppConstants.mapboxToken}",
+
+    return RouteEstimate(
+      distanceMiles: totalMiles,
+      durationMinutes: totalMinutes,
+      fareUsd: totalFare,
+      path: _compactPolyline(mergedPath),
+      steps: mergedSteps,
     );
-    final estimate = await _requestRouteEstimate(url, fallbackPath: cleaned);
-    return estimate ?? _calculateRouteChainWithOsrm(stops: cleaned);
   }
 
   Future<RouteEstimate?> _calculateRouteWithOsrm({
@@ -436,107 +455,8 @@ class MapService {
       "https://router.project-osrm.org/route/v1/driving/$coords"
       "?overview=full"
       "&geometries=geojson"
-      "&steps=false",
+      "&steps=true",
     );
-    final client = HttpClient();
-    client.connectionTimeout = _networkTimeout;
-    try {
-      final request = await client.getUrl(url);
-      request.headers.set(HttpHeaders.userAgentHeader, "AtoB/1.0");
-      final response = await request.close().timeout(_networkTimeout);
-      if (response.statusCode != 200) {
-        return _fallbackEstimate(origin: origin, destination: destination);
-      }
-      final body = await response
-          .transform(utf8.decoder)
-          .join()
-          .timeout(_networkTimeout);
-      final json = jsonDecode(body);
-      if (json is! Map<String, dynamic>) {
-        return _fallbackEstimate(origin: origin, destination: destination);
-      }
-      final routes = json["routes"];
-      if (routes is! List || routes.isEmpty) {
-        return _fallbackEstimate(origin: origin, destination: destination);
-      }
-      final first = routes.first;
-      if (first is! Map) {
-        return _fallbackEstimate(origin: origin, destination: destination);
-      }
-      final map = first.cast<String, dynamic>();
-      final meters = (map["distance"] as num?)?.toDouble() ?? 0;
-      final seconds = (map["duration"] as num?)?.toDouble() ?? 0;
-      final miles = meters / 1609.344;
-      final fare = fareForMiles(miles);
-
-      final path = <LatLng>[];
-      final geometry = map["geometry"];
-      if (geometry is Map) {
-        final coordinates = geometry["coordinates"];
-        if (coordinates is List) {
-          for (final item in coordinates) {
-            if (item is List && item.length >= 2) {
-              final lon = item[0];
-              final lat = item[1];
-              if (lon is num && lat is num) {
-                path.add(LatLng(lat.toDouble(), lon.toDouble()));
-              }
-            }
-          }
-        }
-      }
-      if (path.isEmpty) {
-        path.addAll([origin, destination]);
-      }
-      return RouteEstimate(
-        distanceMiles: miles,
-        durationMinutes: seconds / 60,
-        fareUsd: fare,
-        path: path,
-      );
-    } catch (_) {
-      return _fallbackEstimate(origin: origin, destination: destination);
-    } finally {
-      client.close(force: true);
-    }
-  }
-
-  Future<RouteEstimate?> _calculateRouteChainWithOsrm({
-    required List<LatLng> stops,
-  }) async {
-    final coords = stops
-        .map((point) => "${point.longitude},${point.latitude}")
-        .join(";");
-    final url = Uri.parse(
-      "https://router.project-osrm.org/route/v1/driving/$coords"
-      "?overview=full"
-      "&geometries=geojson"
-      "&steps=false",
-    );
-    return _requestRouteEstimate(url, fallbackPath: stops);
-  }
-
-  RouteEstimate _fallbackEstimate({
-    required LatLng origin,
-    required LatLng destination,
-  }) {
-    const distance = Distance();
-    final miles = distance.as(LengthUnit.Mile, origin, destination);
-    final fare = fareForMiles(miles);
-    // Approx 25 mph urban average.
-    final durationMinutes = (miles / 25) * 60;
-    return RouteEstimate(
-      distanceMiles: miles,
-      durationMinutes: durationMinutes,
-      fareUsd: fare,
-      path: [origin, destination],
-    );
-  }
-
-  Future<RouteEstimate?> _requestRouteEstimate(
-    Uri url, {
-    required List<LatLng> fallbackPath,
-  }) async {
     final client = HttpClient();
     client.connectionTimeout = _networkTimeout;
     try {
@@ -567,6 +487,7 @@ class MapService {
       final seconds = (map["duration"] as num?)?.toDouble() ?? 0;
       final miles = meters / 1609.344;
       final fare = fareForMiles(miles);
+
       final path = <LatLng>[];
       final geometry = map["geometry"];
       if (geometry is Map) {
@@ -583,14 +504,16 @@ class MapService {
           }
         }
       }
-      if (path.isEmpty) {
-        path.addAll(fallbackPath);
+      if (path.length < 2) {
+        return null;
       }
+      final steps = _extractRouteSteps(map);
       return RouteEstimate(
         distanceMiles: miles,
         durationMinutes: seconds / 60,
         fareUsd: fare,
-        path: path,
+        path: _compactPolyline(path),
+        steps: steps,
       );
     } catch (_) {
       return null;
@@ -698,5 +621,86 @@ class MapService {
       if (merged.length >= limit) break;
     }
     return merged;
+  }
+
+  List<LatLng> _compactPolyline(List<LatLng> points) {
+    if (points.length < 2) return points;
+    final result = <LatLng>[points.first];
+    for (var i = 1; i < points.length; i++) {
+      final previous = result.last;
+      final current = points[i];
+      if ((previous.latitude - current.latitude).abs() < 0.000001 &&
+          (previous.longitude - current.longitude).abs() < 0.000001) {
+        continue;
+      }
+      result.add(current);
+    }
+    return result;
+  }
+
+  List<RouteStepModel> _extractRouteSteps(Map<String, dynamic> route) {
+    final legs = route["legs"];
+    if (legs is! List) return const <RouteStepModel>[];
+    final steps = <RouteStepModel>[];
+    for (final leg in legs.whereType<Map>()) {
+      final map = leg.cast<String, dynamic>();
+      final legSteps = map["steps"];
+      if (legSteps is! List) continue;
+      for (final raw in legSteps.whereType<Map>()) {
+        final step = raw.cast<String, dynamic>();
+        final maneuver = step["maneuver"];
+        final distanceMeters = (step["distance"] as num?)?.toDouble() ?? 0;
+        final durationSeconds = (step["duration"] as num?)?.toDouble() ?? 0;
+        final roadName = step["name"]?.toString().trim();
+        final instruction =
+            maneuver is Map && maneuver["instruction"] != null
+            ? maneuver["instruction"].toString().trim()
+            : _fallbackInstruction(roadName, step["mode"]?.toString());
+        double? latitude;
+        double? longitude;
+        if (maneuver is Map) {
+          final location = maneuver["location"];
+          if (location is List && location.length >= 2) {
+            final lonRaw = location[0];
+            final latRaw = location[1];
+            if (lonRaw is num && latRaw is num) {
+              longitude = lonRaw.toDouble();
+              latitude = latRaw.toDouble();
+            }
+          }
+        }
+        if (instruction.isEmpty && distanceMeters <= 0) {
+          continue;
+        }
+        steps.add(
+          RouteStepModel(
+            instruction: instruction.isEmpty
+                ? "Continue"
+                : instruction,
+            distanceMeters: distanceMeters,
+            durationSeconds: durationSeconds,
+            roadName: roadName == null || roadName.isEmpty ? null : roadName,
+            maneuverType: maneuver is Map ? maneuver["type"]?.toString() : null,
+            maneuverModifier: maneuver is Map
+                ? maneuver["modifier"]?.toString()
+                : null,
+            location: latitude == null || longitude == null
+                ? null
+                : LocationModel(latitude: latitude, longitude: longitude),
+          ),
+        );
+      }
+    }
+    return steps;
+  }
+
+  String _fallbackInstruction(String? roadName, String? mode) {
+    final road = (roadName ?? "").trim();
+    if (road.isNotEmpty) return "Continue on $road";
+    final normalizedMode = (mode ?? "").trim();
+    if (normalizedMode.isNotEmpty) {
+      return "Continue by $normalizedMode";
+    }
+    return "Continue";
   }
 }

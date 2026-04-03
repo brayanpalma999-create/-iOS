@@ -29,6 +29,7 @@ class TripProvider extends ChangeNotifier {
     double durationMinutes = 0,
     double fareUsd = 0,
     List<LocationModel> routePoints = const <LocationModel>[],
+    List<RouteStepModel> routeSteps = const <RouteStepModel>[],
     LocationModel? originLocation,
     LocationModel? destinationLocation,
   }) {
@@ -40,6 +41,7 @@ class TripProvider extends ChangeNotifier {
       durationMinutes: durationMinutes,
       fareUsd: fareUsd,
       routePoints: routePoints,
+      routeSteps: routeSteps,
       originLocation: originLocation,
       destinationLocation: destinationLocation,
     );
@@ -72,6 +74,7 @@ class TripProvider extends ChangeNotifier {
     double? durationMinutes,
     double? fareUsd,
     List<LocationModel>? routePoints,
+    List<RouteStepModel>? routeSteps,
     LocationModel? originLocation,
     LocationModel? destinationLocation,
   }) {
@@ -82,6 +85,7 @@ class TripProvider extends ChangeNotifier {
       durationMinutes: durationMinutes,
       fareUsd: fareUsd,
       routePoints: routePoints,
+      routeSteps: routeSteps,
       originLocation: originLocation,
       destinationLocation: destinationLocation,
     );

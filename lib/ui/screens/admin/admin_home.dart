@@ -140,47 +140,64 @@ class _AdminHomeState extends State<AdminHome> {
             ),
           ],
         ),
-        child: NavigationBar(
-          selectedIndex: _index,
-          onDestinationSelected: (i) {
-            setState(() => _index = i);
-            _saveAdminPanelIndex(i);
-          },
-          backgroundColor: Colors.transparent,
-          destinations: [
-            NavigationDestination(
-              icon: const Icon(Icons.map_rounded),
-              label: t(es: "Mapa", en: "Map"),
-            ),
-            NavigationDestination(
-              icon: const Icon(Icons.alt_route_rounded),
-              label: t(es: "Asignar", en: "Assign"),
-            ),
-            NavigationDestination(
-              icon: const Icon(Icons.mic_rounded),
-              label: t(es: "Intercom", en: "Intercom"),
-            ),
-            NavigationDestination(
-              icon: const Icon(Icons.payments_rounded),
-              label: t(es: "Ganancias", en: "Earnings"),
-            ),
-            NavigationDestination(
-              icon: const Icon(Icons.badge_outlined),
-              label: t(es: "Acceso", en: "Access"),
-            ),
-            NavigationDestination(
-              icon: CircleAvatar(
-                radius: 13,
-                backgroundColor: Color(0x1F3DDC97),
-                child: Icon(
-                  Icons.person_rounded,
-                  size: 16,
-                  color: Color(0xFF8DF5C6),
-                ),
+        child: NavigationBarTheme(
+          data: NavigationBarThemeData(
+            height: 72,
+            iconTheme: WidgetStateProperty.resolveWith((states) {
+              final isSelected = states.contains(WidgetState.selected);
+              return IconThemeData(size: isSelected ? 22 : 21);
+            }),
+            labelTextStyle: WidgetStateProperty.resolveWith((states) {
+              final isSelected = states.contains(WidgetState.selected);
+              return TextStyle(
+                fontSize: isSelected ? 11.5 : 11,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
+                letterSpacing: -0.1,
+              );
+            }),
+          ),
+          child: NavigationBar(
+            selectedIndex: _index,
+            onDestinationSelected: (i) {
+              setState(() => _index = i);
+              _saveAdminPanelIndex(i);
+            },
+            backgroundColor: Colors.transparent,
+            destinations: [
+              NavigationDestination(
+                icon: const Icon(Icons.map_rounded),
+                label: t(es: "Mapa", en: "Map"),
               ),
-              label: t(es: "Cuenta", en: "Account"),
-            ),
-          ],
+              NavigationDestination(
+                icon: const Icon(Icons.alt_route_rounded),
+                label: t(es: "Asignar", en: "Assign"),
+              ),
+              NavigationDestination(
+                icon: const Icon(Icons.mic_rounded),
+                label: t(es: "Intercom", en: "Intercom"),
+              ),
+              NavigationDestination(
+                icon: const Icon(Icons.payments_rounded),
+                label: t(es: "Ganancias", en: "Earnings"),
+              ),
+              NavigationDestination(
+                icon: const Icon(Icons.badge_outlined),
+                label: t(es: "Acceso", en: "Access"),
+              ),
+              NavigationDestination(
+                icon: CircleAvatar(
+                  radius: 12,
+                  backgroundColor: const Color(0x1F3DDC97),
+                  child: const Icon(
+                    Icons.person_rounded,
+                    size: 14,
+                    color: Color(0xFF8DF5C6),
+                  ),
+                ),
+                label: t(es: "Cuenta", en: "Account"),
+              ),
+            ],
+          ),
         ),
       ),
     );
