@@ -169,6 +169,8 @@ class AuthProvider extends ChangeNotifier {
   }
 
   static const String _authorizedDriversKey = "authorized_driver_profiles_v2";
+  static const String _authorizedDriversBackupKey =
+      "authorized_driver_profiles_backup_v1";
   static const String _accountProfilesKey = "atob_account_profiles_v1";
 
   UserModel? _user;
@@ -800,6 +802,7 @@ class AuthProvider extends ChangeNotifier {
     if (remote.isEmpty) {
       if (_authorizedDrivers.isEmpty) {
         _restoreAuthorizedDriversFromAdminBackup();
+        await _restoreAuthorizedDriversFromServerAdminBackup();
       }
       if (_authorizedDrivers.isNotEmpty) {
         await _persistAuthorizedDrivers();
@@ -861,6 +864,24 @@ class AuthProvider extends ChangeNotifier {
           shouldPersistDrivers = true;
         }
       }
+      if (_authorizedDrivers.isEmpty) {
+        final rawBackup = prefs.getString(_authorizedDriversBackupKey);
+        if (rawBackup != null && rawBackup.trim().isNotEmpty) {
+          final decoded = jsonDecode(rawBackup);
+          if (decoded is List) {
+            for (final item in decoded.whereType<Map>()) {
+              final profile = _secureDriverAccessProfile(
+                DriverAccessProfile.fromJson(item.cast()),
+              );
+              if (profile.id.isEmpty || profile.email.trim().isEmpty) {
+                continue;
+              }
+              _upsertAuthorizedDriver(profile);
+            }
+            shouldPersistDrivers = _authorizedDrivers.isNotEmpty || shouldPersistDrivers;
+          }
+        }
+      }
 
       final rawAccounts = prefs.getString(_accountProfilesKey);
       _storedAccounts.clear();
@@ -908,7 +929,9 @@ class AuthProvider extends ChangeNotifier {
       _authorizedDrivers.map((profile) => profile.toJson()).toList(),
     );
     await prefs.setString(_authorizedDriversKey, serialized);
+    await prefs.setString(_authorizedDriversBackupKey, serialized);
     await _persistStoredAccounts();
+    await _pushAdminAuthorizedDriversBackupToServer();
   }
 
   Future<void> _persistStoredAccounts() async {
@@ -1086,6 +1109,7 @@ class AuthProvider extends ChangeNotifier {
     required String passwordHash,
     required String? passwordIdentity,
     required DateTime? passwordUpdatedAt,
+    Map<String, dynamic>? extraBody,
   }) async {
     await _sendJsonRequest(
       method: "POST",
@@ -1097,6 +1121,7 @@ class AuthProvider extends ChangeNotifier {
         "passwordIdentity": passwordIdentity,
         "passwordUpdatedAt": passwordUpdatedAt?.toIso8601String(),
         "user": user.toJson(),
+        ...?extraBody,
       },
     );
   }
@@ -1209,6 +1234,63 @@ class AuthProvider extends ChangeNotifier {
       restored = true;
     }
     return restored;
+  }
+
+  Future<void> _restoreAuthorizedDriversFromServerAdminBackup() async {
+    final adminKey = _adminAccountStorageKey();
+    final remote = await _fetchStoredAccountFromServer(adminKey);
+    if (remote == null) return;
+    _storedAccounts[adminKey] = _secureStoredAccountRecord(adminKey, remote);
+    final raw = remote["authorizedDriversBackup"];
+    if (raw is! List) return;
+    var restored = false;
+    for (final item in raw.whereType<Map>()) {
+      final profile = _secureDriverAccessProfile(
+        DriverAccessProfile.fromJson(item.cast<String, dynamic>()),
+      );
+      if (profile.id.isEmpty || profile.email.trim().isEmpty) continue;
+      _upsertAuthorizedDriver(profile);
+      restored = true;
+    }
+    if (restored) {
+      await _persistStoredAccounts();
+    }
+  }
+
+  Future<void> _pushAdminAuthorizedDriversBackupToServer() async {
+    final adminKey = _adminAccountStorageKey();
+    final stored = _secureStoredAccountRecord(adminKey, _storedAccounts[adminKey]);
+    final adminUser = _user?.role == UserRole.admin
+        ? _user!
+        : (_userFromStoredAccount(stored) ??
+            UserModel(
+              id: "adm_dispatch_primary",
+              name: "Admin",
+              role: UserRole.admin,
+              legalName: "Admin Dispatch",
+              email: AuthSecurity.fixedAdminEmail,
+              phoneNumber: "+1 804 555 1200",
+              address: "Virginia dispatch lane",
+              governmentId: "ADM-PRIMARY",
+              languageCode: "es",
+              mapThemeMode: "flow",
+              isOnline: true,
+            ));
+    await _saveStoredAccountRecordToServer(
+      accountKey: adminKey,
+      user: adminUser,
+      passwordHash: stored["password"]?.toString() ?? AuthSecurity.fixedAdminPasswordHash,
+      passwordIdentity:
+          stored["passwordIdentity"]?.toString() ?? AuthSecurity.fixedAdminCredentialId,
+      passwordUpdatedAt:
+          _passwordUpdatedAtFromStoredAccount(stored) ?? DateTime.now(),
+      extraBody: {
+        "authorizedDriversBackup": _authorizedDrivers
+            .map((profile) => _secureDriverAccessProfile(profile).toJson())
+            .toList(growable: false),
+        "authorizedDriversUpdatedAt": DateTime.now().toIso8601String(),
+      },
+    );
   }
 
   void _upsertAuthorizedDriver(DriverAccessProfile profile) {
