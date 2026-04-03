@@ -797,15 +797,40 @@ class AuthProvider extends ChangeNotifier {
   Future<void> _refreshAuthorizedDriversFromServer() async {
     final remote = await _fetchAuthorizedDriversFromServer();
     if (remote == null) return;
-    if (remote.isEmpty && _authorizedDrivers.isNotEmpty) {
-      await _restoreAuthorizedDriversOnServer();
-      notifyListeners();
+    if (remote.isEmpty) {
+      if (_authorizedDrivers.isEmpty) {
+        _restoreAuthorizedDriversFromAdminBackup();
+      }
+      if (_authorizedDrivers.isNotEmpty) {
+        await _persistAuthorizedDrivers();
+        await _restoreAuthorizedDriversOnServer();
+        notifyListeners();
+      }
       return;
     }
+
+    final mergedProfiles = <DriverAccessProfile>[
+      ...remote.map(_secureDriverAccessProfile),
+    ];
+    for (final local in _authorizedDrivers.map(_secureDriverAccessProfile)) {
+      final exists = mergedProfiles.any(
+        (item) =>
+            item.id == local.id ||
+            DriverAccessProfile.normalizeLookup(item.email) ==
+                DriverAccessProfile.normalizeLookup(local.email),
+      );
+      if (!exists) {
+        mergedProfiles.add(local);
+      }
+    }
+
     _authorizedDrivers
       ..clear()
-      ..addAll(remote.map(_secureDriverAccessProfile));
+      ..addAll(mergedProfiles);
     await _persistAuthorizedDrivers();
+    if (mergedProfiles.length > remote.length) {
+      await _restoreAuthorizedDriversOnServer();
+    }
     notifyListeners();
   }
 
@@ -856,6 +881,9 @@ class AuthProvider extends ChangeNotifier {
         }
       }
       _ensureFixedAdminAccountSeeded();
+      if (_authorizedDrivers.isEmpty) {
+        shouldPersistDrivers = _restoreAuthorizedDriversFromAdminBackup();
+      }
       shouldPersistAccounts = true;
     } catch (_) {
       _authorizedDrivers.clear();
@@ -875,10 +903,12 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> _persistAuthorizedDrivers() async {
     final prefs = await SharedPreferences.getInstance();
+    _syncAuthorizedDriversToAdminBackup();
     final serialized = jsonEncode(
       _authorizedDrivers.map((profile) => profile.toJson()).toList(),
     );
     await prefs.setString(_authorizedDriversKey, serialized);
+    await _persistStoredAccounts();
   }
 
   Future<void> _persistStoredAccounts() async {
@@ -1141,6 +1171,44 @@ class AuthProvider extends ChangeNotifier {
         governmentId: _nullableTrim(user.governmentId),
       );
     }
+  }
+
+  String _adminAccountStorageKey() {
+    return _resolveAccountKey(
+      role: UserRole.admin,
+      loginIdentifier: AuthSecurity.fixedAdminEmail,
+      email: AuthSecurity.fixedAdminEmail,
+    );
+  }
+
+  void _syncAuthorizedDriversToAdminBackup() {
+    final adminKey = _adminAccountStorageKey();
+    final current = _secureStoredAccountRecord(adminKey, _storedAccounts[adminKey]);
+    _storedAccounts[adminKey] = {
+      ...current,
+      "authorizedDriversBackup": _authorizedDrivers
+          .map((profile) => _secureDriverAccessProfile(profile).toJson())
+          .toList(growable: false),
+      "authorizedDriversUpdatedAt": DateTime.now().toIso8601String(),
+    };
+  }
+
+  bool _restoreAuthorizedDriversFromAdminBackup() {
+    final adminKey = _adminAccountStorageKey();
+    final current = _storedAccounts[adminKey];
+    final raw = current?["authorizedDriversBackup"];
+    if (raw is! List || raw.isEmpty) return false;
+
+    var restored = false;
+    for (final item in raw.whereType<Map>()) {
+      final profile = _secureDriverAccessProfile(
+        DriverAccessProfile.fromJson(item.cast<String, dynamic>()),
+      );
+      if (profile.id.isEmpty || profile.email.trim().isEmpty) continue;
+      _upsertAuthorizedDriver(profile);
+      restored = true;
+    }
+    return restored;
   }
 
   void _upsertAuthorizedDriver(DriverAccessProfile profile) {
