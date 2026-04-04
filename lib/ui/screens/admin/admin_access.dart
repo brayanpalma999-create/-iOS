@@ -31,10 +31,12 @@ class _AdminAccessState extends State<AdminAccess> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       context.read<AuthProvider>().refreshAuthorizedDrivers();
+      context.read<AuthProvider>().warmAuthorizedDriverRecords();
     });
-    _refreshTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+    _refreshTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (!mounted) return;
       context.read<AuthProvider>().refreshAuthorizedDrivers();
+      context.read<AuthProvider>().warmAuthorizedDriverRecords();
     });
   }
 

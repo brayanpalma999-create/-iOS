@@ -49,11 +49,13 @@ class _AdminSettingsState extends State<AdminSettings> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       context.read<AuthProvider>().refreshAuthorizedDrivers();
+      context.read<AuthProvider>().warmAuthorizedDriverRecords();
       context.read<OperationsProvider>().refresh();
     });
-    _refreshTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+    _refreshTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (!mounted) return;
       context.read<AuthProvider>().refreshAuthorizedDrivers();
+      context.read<AuthProvider>().warmAuthorizedDriverRecords();
       context.read<OperationsProvider>().refresh(silent: true);
     });
   }

@@ -210,6 +210,7 @@ class AuthProvider extends ChangeNotifier {
       loginIdentifier: AuthSecurity.fixedAdminEmail,
       email: AuthSecurity.fixedAdminEmail,
     );
+    await warmAuthorizedDriverRecords();
   }
 
   Future<void> refreshAuthorizedDrivers() async {
@@ -219,18 +220,7 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> warmAuthorizedDriverRecords() async {
     await ensureLoaded();
-    var changed = false;
-    for (final profile in _authorizedDrivers) {
-      final accountKey = _resolveAccountKey(
-        role: UserRole.driver,
-        loginIdentifier: profile.displayName,
-        email: profile.email,
-      );
-      final remote = await _fetchStoredAccountFromServer(accountKey);
-      if (remote == null) continue;
-      _storedAccounts[accountKey] = _secureStoredAccountRecord(accountKey, remote);
-      changed = true;
-    }
+    final changed = await _refreshDriverAccountProfilesFromServer();
     if (changed) {
       await _persistStoredAccounts();
       notifyListeners();
@@ -1090,6 +1080,26 @@ class AuthProvider extends ChangeNotifier {
     return null;
   }
 
+  Future<List<Map<String, dynamic>>?> _fetchStoredAccountsFromServer({
+    String? role,
+  }) async {
+    final response = await _sendJsonRequest(
+      method: "GET",
+      path: "/accounts/profiles",
+      queryParameters: {
+        if ((role ?? "").trim().isNotEmpty) "role": role!.trim(),
+        "limit": "300",
+      },
+    );
+    if (response == null || response["ok"] != true) return null;
+    final profiles = response["profiles"];
+    if (profiles is! List) return null;
+    return profiles
+        .whereType<Map>()
+        .map((item) => item.cast<String, dynamic>())
+        .toList(growable: false);
+  }
+
   Future<void> _saveStoredAccountToServer({
     required String accountKey,
     required UserModel user,
@@ -1101,6 +1111,56 @@ class AuthProvider extends ChangeNotifier {
       passwordIdentity: _currentPasswordIdentity,
       passwordUpdatedAt: _passwordUpdatedAt,
     );
+  }
+
+  Future<bool> _refreshDriverAccountProfilesFromServer() async {
+    final remoteProfiles = await _fetchStoredAccountsFromServer(role: "driver");
+    if (remoteProfiles == null || remoteProfiles.isEmpty) {
+      return false;
+    }
+
+    var changed = false;
+    for (final remote in remoteProfiles) {
+      final accountKey = remote["accountKey"]?.toString().trim() ?? "";
+      if (accountKey.isEmpty) continue;
+      final secureRecord = _secureStoredAccountRecord(accountKey, remote);
+      final currentEncoded = jsonEncode(
+        _storedAccounts[accountKey] ?? const <String, dynamic>{},
+      );
+      final nextEncoded = jsonEncode(secureRecord);
+      if (currentEncoded != nextEncoded) {
+        _storedAccounts[accountKey] = secureRecord;
+        changed = true;
+      }
+
+      final snapshotRaw = secureRecord["driverAccessSnapshot"];
+      if (snapshotRaw is! Map) continue;
+      final snapshot = _secureDriverAccessProfile(
+        DriverAccessProfile.fromJson(snapshotRaw.cast<String, dynamic>()),
+      );
+      if (snapshot.id.isEmpty || snapshot.email.trim().isEmpty) continue;
+
+      final before = _authorizedDrivers
+          .where(
+            (item) =>
+                item.id == snapshot.id ||
+                DriverAccessProfile.normalizeLookup(item.email) ==
+                    DriverAccessProfile.normalizeLookup(snapshot.email),
+          )
+          .cast<DriverAccessProfile?>()
+          .firstWhere((item) => item != null, orElse: () => null);
+      _upsertAuthorizedDriver(snapshot);
+      if (before == null ||
+          jsonEncode(before.toJson()) != jsonEncode(snapshot.toJson())) {
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      await _persistAuthorizedDrivers();
+      _syncAuthorizedDriversToAdminBackup();
+    }
+    return changed;
   }
 
   Future<void> _saveStoredAccountRecordToServer({

@@ -220,13 +220,21 @@ class DriverProvider extends ChangeNotifier {
     final existingById = <String, DriverModel>{
       for (final driver in _drivers) driver.id: driver,
     };
+    final existingByStableKey = <String, DriverModel>{
+      for (final driver in _drivers) _stableDriverKey(driver): driver,
+    };
     final incoming = <DriverModel>[];
     final incomingIds = <String>{};
+    final incomingStableKeys = <String>{};
 
     for (final item in payload) {
       if (item is! Map) continue;
       final id = item["id"]?.toString();
       if (id == null || id.isEmpty) continue;
+      final itemStableKey = _stableDriverKeyFromPayload(item, fallbackId: id);
+      if (incomingStableKeys.contains(itemStableKey)) {
+        continue;
+      }
       final name = item["name"]?.toString().trim();
       if (name == null || name.isEmpty) continue;
       final status = _normalizeOperationalStatus(
@@ -236,10 +244,13 @@ class DriverProvider extends ChangeNotifier {
       final tripId = _stringValue(item["currentTripId"]);
       final location = _locationFromPayload(item["location"], id);
 
-      final existing = existingById[id];
+      final existing =
+          existingById[id] ?? existingByStableKey[itemStableKey];
       DriverModel next;
       if (_self != null &&
-          (id == _self!.id || id == (_socketService.socketId ?? ""))) {
+          (id == _self!.id ||
+              id == (_socketService.socketId ?? "") ||
+              itemStableKey == _stableDriverKey(_self!))) {
         _self = _self!.copyWith(
           id: id,
           intercomId:
@@ -285,6 +296,7 @@ class DriverProvider extends ChangeNotifier {
 
       incoming.add(next);
       incomingIds.add(id);
+      incomingStableKeys.add(itemStableKey);
       _pathByDriver.putIfAbsent(id, () => <LocationModel>[next.location]);
     }
 
@@ -798,6 +810,22 @@ class DriverProvider extends ChangeNotifier {
       return "No disponible (Invisible)";
     }
     return fallback;
+  }
+
+  String _stableDriverKey(DriverModel driver) {
+    final intercom = (driver.intercomId ?? "").trim().toLowerCase();
+    if (intercom.isNotEmpty) return "intercom:$intercom";
+    final email = driver.email.trim().toLowerCase();
+    if (email.isNotEmpty) return "email:$email";
+    return "id:${driver.id.trim().toLowerCase()}";
+  }
+
+  String _stableDriverKeyFromPayload(Map payload, {required String fallbackId}) {
+    final intercom = payload["intercomId"]?.toString().trim().toLowerCase() ?? "";
+    if (intercom.isNotEmpty) return "intercom:$intercom";
+    final email = payload["email"]?.toString().trim().toLowerCase() ?? "";
+    if (email.isNotEmpty) return "email:$email";
+    return "id:${fallbackId.trim().toLowerCase()}";
   }
 }
 

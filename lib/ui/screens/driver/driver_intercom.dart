@@ -126,6 +126,48 @@ class DriverIntercom extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 16),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 12,
+              height: 12,
+              decoration: BoxDecoration(
+                color: intercom.channelLightColor,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: intercom.channelLightColor.withValues(alpha: 0.55),
+                    blurRadius: 12,
+                    spreadRadius: 1,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            Flexible(
+              child: Text(
+                context.isEnglish
+                    ? (intercom.isTransmitting
+                          ? "You are speaking"
+                          : intercom.activeSpeakerLabel == null
+                          ? "Nobody speaking"
+                          : "${intercom.activeSpeakerLabel} is speaking")
+                    : (intercom.isTransmitting
+                          ? "Tu estas hablando"
+                          : intercom.activeSpeakerLabel == null
+                          ? "Nadie hablando"
+                          : "${intercom.activeSpeakerLabel} esta hablando"),
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: intercom.channelLightColor,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
         Text(
           intercom.activeSpeakerLabel == null
               ? t(es: "Hablando ahora: nadie", en: "Speaking now: nobody")
@@ -177,6 +219,9 @@ class _ChannelLightState extends State<_ChannelLight>
       upperBound: 1,
       value: 1,
     );
+    if (widget.blinking) {
+      _blinkController.repeat(reverse: true);
+    }
   }
 
   @override

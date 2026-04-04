@@ -85,9 +85,18 @@ class IntercomProvider extends ChangeNotifier {
   String? get lastErrorMessage => _lastErrorMessage;
   String? get activeSpeakerId => _activeSpeakerId;
   String? get activeSpeakerRole => _activeSpeakerRole;
-  bool get shouldBlinkRed => isPrivate;
-  Color get channelLightColor =>
-      isPrivate ? Colors.redAccent : Colors.greenAccent;
+  bool get hasRemoteSpeaker => _channelBusy && !_isTransmitting;
+  bool get hasSpeakingActivity => _channelBusy || _isTransmitting;
+  bool get shouldBlinkRed => isPrivate && !hasSpeakingActivity;
+  Color get channelLightColor {
+    if (_isTransmitting) {
+      return Colors.cyanAccent;
+    }
+    if (_channelBusy) {
+      return Colors.orangeAccent;
+    }
+    return isPrivate ? Colors.redAccent : Colors.greenAccent;
+  }
 
   List<IntercomPeer> get availableDrivers => _driverProvider.drivers
       .where(
@@ -110,6 +119,17 @@ class IntercomProvider extends ChangeNotifier {
     if (id == null && (name == null || name.isEmpty)) return null;
     if (name != null && name.isNotEmpty) return name;
     return id;
+  }
+
+  String get speakingStatusLabel {
+    if (_isTransmitting) {
+      return "Tu estas hablando";
+    }
+    final active = activeSpeakerLabel;
+    if (active != null && active.trim().isNotEmpty) {
+      return "$active esta hablando";
+    }
+    return "Nadie hablando";
   }
 
   String displayNameForTarget(String? id) {
