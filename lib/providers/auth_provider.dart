@@ -1363,15 +1363,18 @@ class AuthProvider extends ChangeNotifier {
     Map<String, String>? queryParameters,
   }) async {
     final client = HttpClient();
+    client.connectionTimeout = const Duration(seconds: 12);
     try {
       var uri = Uri.parse("${AppConstants.socketUrl}$path");
       if (queryParameters != null && queryParameters.isNotEmpty) {
         uri = uri.replace(queryParameters: queryParameters);
       }
-      final request = await client.openUrl(
-        method,
-        uri,
-      );
+      final request = await client
+          .openUrl(
+            method,
+            uri,
+          )
+          .timeout(const Duration(seconds: 15));
       request.headers.set(HttpHeaders.acceptHeader, "application/json");
       if (body != null) {
         request.headers.set(
@@ -1380,8 +1383,11 @@ class AuthProvider extends ChangeNotifier {
         );
         request.write(jsonEncode(body));
       }
-      final response = await request.close();
-      final text = await response.transform(utf8.decoder).join();
+      final response = await request.close().timeout(const Duration(seconds: 15));
+      final text = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 15));
       if (response.statusCode < 200 || response.statusCode >= 300) {
         return null;
       }
@@ -1430,13 +1436,18 @@ class AuthProvider extends ChangeNotifier {
           "driverAccessSnapshot": driverSnapshot.toJson(),
       },
     );
-    if (user.role == UserRole.driver && _currentDriverAccessId != null) {
+    if (user.role == UserRole.driver &&
+        _currentDriverAccessId != null &&
+        driverSnapshot != null &&
+        driverSnapshot.accessCode.trim().isNotEmpty) {
       await _saveAuthorizedDriverToServer(
         id: _currentDriverAccessId,
         displayName: user.legalName,
         email: user.email,
-        accessCode: _password,
-        accessCodeTail: _driverAccessTail(_currentDriverAccessId!),
+        accessCode: driverSnapshot.accessCode,
+        accessCodeTail:
+            _nonEmpty(driverSnapshot.accessCodeTail) ??
+            _driverAccessTail(_currentDriverAccessId!),
         phoneNumber: _nullableTrim(user.phoneNumber),
         governmentId: _nullableTrim(user.governmentId),
       );
