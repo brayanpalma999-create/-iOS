@@ -143,33 +143,33 @@ class _DriverMapState extends State<DriverMap> {
             MapThemeMode.satellite => AppConstants.tileSatelliteUrl,
           }
         : null;
-    final layers = <Widget>[
+    if (mapboxUrl != null) {
+      return <Widget>[
+        TileLayer(
+          urlTemplate: mapboxUrl,
+          fallbackUrl: AppConstants.tileFallbackUrl,
+          retinaMode: false,
+          errorTileCallback: (_, error, stackTrace) => _onTileError(error),
+          evictErrorTileStrategy: EvictErrorTileStrategy.notVisibleRespectMargin,
+          userAgentPackageName: "com.example.atob_app",
+          keepBuffer: 2,
+          panBuffer: 1,
+          maxNativeZoom: 19,
+        ),
+      ];
+    }
+
+    return <Widget>[
       TileLayer(
         urlTemplate: AppConstants.tileFallbackUrl,
         fallbackUrl: AppConstants.tileFallbackBackupUrl,
         retinaMode: false,
         userAgentPackageName: "com.example.atob_app",
-        keepBuffer: 1,
-        panBuffer: 0,
+        keepBuffer: 2,
+        panBuffer: 1,
         maxNativeZoom: 19,
       ),
     ];
-    if (mapboxUrl != null) {
-      layers.add(
-        TileLayer(
-          urlTemplate: mapboxUrl,
-          fallbackUrl: AppConstants.tileFallbackBackupUrl,
-          retinaMode: false,
-          errorTileCallback: (_, error, stackTrace) => _onTileError(error),
-          evictErrorTileStrategy: EvictErrorTileStrategy.notVisibleRespectMargin,
-          userAgentPackageName: "com.example.atob_app",
-          keepBuffer: 1,
-          panBuffer: 0,
-          maxNativeZoom: 19,
-        ),
-      );
-    }
-    return layers;
   }
 
   bool _shouldRecenter(LatLng point) {

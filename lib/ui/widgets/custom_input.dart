@@ -8,6 +8,7 @@ class CustomInput extends StatelessWidget {
     this.obscureText = false,
     this.prefixIcon,
     this.onChanged,
+    this.maxLines = 1,
   });
 
   final TextEditingController controller;
@@ -15,6 +16,7 @@ class CustomInput extends StatelessWidget {
   final bool obscureText;
   final IconData? prefixIcon;
   final ValueChanged<String>? onChanged;
+  final int maxLines;
 
   @override
   Widget build(BuildContext context) {
@@ -22,6 +24,7 @@ class CustomInput extends StatelessWidget {
       controller: controller,
       onChanged: onChanged,
       obscureText: obscureText,
+      maxLines: obscureText ? 1 : maxLines,
       style: const TextStyle(
         color: Colors.white,
         fontSize: 15.5,

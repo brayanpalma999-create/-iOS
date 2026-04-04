@@ -10,6 +10,7 @@ import "../models/trip_model.dart";
 import "../models/user_model.dart";
 import "../services/location_service.dart";
 import "../services/map_service.dart";
+import "../services/route_notification_service.dart";
 import "../services/socket_service.dart";
 import "trip_provider.dart";
 
@@ -19,23 +20,29 @@ class DriverProvider extends ChangeNotifier {
     required LocationService locationService,
     required MapService mapService,
     required TripProvider tripProvider,
+    required RouteNotificationService routeNotificationService,
   }) : _socketService = socketService,
        _locationService = locationService,
        _mapService = mapService,
-       _tripProvider = tripProvider {
+       _tripProvider = tripProvider,
+       _routeNotificationService = routeNotificationService {
     _bindSocketListeners();
+    _bindRouteNotificationActions();
+    unawaited(_consumePendingRouteAction());
   }
 
   final SocketService _socketService;
   final LocationService _locationService;
   final MapService _mapService;
   final TripProvider _tripProvider;
+  final RouteNotificationService _routeNotificationService;
 
   DriverModel? _self;
   final List<DriverModel> _drivers = <DriverModel>[];
   final Map<String, List<LocationModel>> _pathByDriver =
       <String, List<LocationModel>>{};
   StreamSubscription<bool>? _connectionSubscription;
+  StreamSubscription<RouteNotificationAction>? _routeActionSubscription;
   bool _listenersBound = false;
   String? _lastRegistrationKey;
   String? _sessionRole;
@@ -76,7 +83,7 @@ class DriverProvider extends ChangeNotifier {
     final safeInitialLocation = initialLocation ?? _emptyLocation();
     final initialStatus = initialLocation == null
         ? "Ubicacion pendiente"
-        : "Disponible (Visible)";
+        : "No disponible (Invisible)";
     _self = DriverModel(
       id: id,
       intercomId: id,
@@ -239,7 +246,7 @@ class DriverProvider extends ChangeNotifier {
       if (name == null || name.isEmpty) continue;
       final status = _normalizeOperationalStatus(
         item["status"]?.toString(),
-        fallback: existingById[id]?.status ?? "Disponible (Visible)",
+        fallback: existingById[id]?.status ?? "No disponible (Invisible)",
       );
       final tripId = _stringValue(item["currentTripId"]);
       final location = _locationFromPayload(item["location"], id);
@@ -327,7 +334,7 @@ class DriverProvider extends ChangeNotifier {
     final index = _drivers.indexWhere((d) => d.id == driverId);
     final status = _normalizeOperationalStatus(
       payload["status"]?.toString(),
-      fallback: index >= 0 ? _drivers[index].status : "Disponible (Visible)",
+      fallback: index >= 0 ? _drivers[index].status : "No disponible (Invisible)",
     );
     final base = index >= 0
         ? _drivers[index]
@@ -348,7 +355,7 @@ class DriverProvider extends ChangeNotifier {
             vehiclePlate: _stringValue(payload["vehiclePlate"]),
             vehicleYear: _stringValue(payload["vehicleYear"]),
             location: _emptyLocation(),
-            status: "Disponible (Visible)",
+            status: "No disponible (Invisible)",
             isOnline: true,
           );
     final nextLocation = (latitude != null && longitude != null)
@@ -410,6 +417,14 @@ class DriverProvider extends ChangeNotifier {
     _self = _self?.copyWith(currentTripId: nextTripId);
     if (_self != null) {
       _upsertDriver(_self!);
+    }
+    if (tripId != null &&
+        tripId.isNotEmpty &&
+        (tripStatus == null || tripStatus == "assigned")) {
+      final trip = _tripProvider.byId(tripId);
+      if (trip != null) {
+        unawaited(_routeNotificationService.showTripAssignedNotification(trip));
+      }
     }
     notifyListeners();
   }
@@ -738,7 +753,36 @@ class DriverProvider extends ChangeNotifier {
   @override
   void dispose() {
     _connectionSubscription?.cancel();
+    _routeActionSubscription?.cancel();
     super.dispose();
+  }
+
+  void _bindRouteNotificationActions() {
+    _routeActionSubscription ??= _routeNotificationService.actions.listen((
+      action,
+    ) {
+      unawaited(_handleRouteNotificationAction(action));
+    });
+  }
+
+  Future<void> _consumePendingRouteAction() async {
+    final pending = await _routeNotificationService.consumePendingAction();
+    if (pending == null) return;
+    await _handleRouteNotificationAction(pending);
+  }
+
+  Future<void> _handleRouteNotificationAction(
+    RouteNotificationAction action,
+  ) async {
+    if (action.actionId != RouteNotificationService.startRouteActionId) {
+      return;
+    }
+    final trip = _tripProvider.byId(action.tripId);
+    if (trip == null) return;
+    if (trip.status == "accepted" || trip.status == "picked_up") {
+      return;
+    }
+    await startAssignedTrip(action.tripId);
   }
 
   Map<String, dynamic>? _asStringMap(dynamic payload) {

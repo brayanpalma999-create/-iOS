@@ -6,6 +6,7 @@ import "package:flutter/material.dart";
 import "package:shared_preferences/shared_preferences.dart";
 
 import "../models/user_model.dart";
+import "../services/telemetry_service.dart";
 import "../utils/auth_security.dart";
 import "../utils/constants.dart";
 
@@ -172,6 +173,11 @@ class AuthProvider extends ChangeNotifier {
   static const String _authorizedDriversBackupKey =
       "authorized_driver_profiles_backup_v1";
   static const String _accountProfilesKey = "atob_account_profiles_v1";
+  static const String _activeSessionAccountKey =
+      "atob_active_session_account_key_v1";
+  static const String _activeSessionRoleKey = "atob_active_session_role_v1";
+  static const String _activeSessionDriverAccessIdKey =
+      "atob_active_session_driver_access_id_v1";
 
   UserModel? _user;
   String _password = "";
@@ -202,6 +208,26 @@ class AuthProvider extends ChangeNotifier {
   bool get hasAuthorizedDrivers =>
       _authorizedDrivers.any((profile) => profile.isActive);
   String get fixedAdminEmail => AuthSecurity.fixedAdminEmail;
+  bool get hasActiveSession => _user != null;
+  DriverAccessProfile? get currentDriverAccessProfile {
+    final currentId = _currentDriverAccessId;
+    if (currentId == null || currentId.trim().isEmpty) return null;
+    for (final profile in _authorizedDrivers) {
+      if (profile.id == currentId) return profile;
+    }
+    return null;
+  }
+  String? get adminAvatarPath {
+    final stored = _storedAccounts[_adminAccountStorageKey()];
+    final adminUser = _userFromStoredAccount(stored);
+    if (adminUser != null) {
+      return _nonEmpty(adminUser.avatarPath);
+    }
+    if (_user?.role == UserRole.admin) {
+      return _nonEmpty(_user?.avatarPath);
+    }
+    return null;
+  }
 
   Future<void> refreshAdminPanelState() async {
     await ensureLoaded();
@@ -348,7 +374,19 @@ class AuthProvider extends ChangeNotifier {
         : _passwordFromStoredAccount(stored);
     _passwordUpdatedAt =
         _passwordUpdatedAtFromStoredAccount(stored) ?? DateTime.now();
+    unawaited(_persistSessionSnapshot());
     unawaited(_persistCurrentAccount());
+    unawaited(
+      TelemetryService.captureMessage(
+        "User login",
+        category: "auth_login",
+        accountKey: accountKey,
+        role: role.name,
+        context: {
+          "userId": resolvedId,
+        },
+      ),
+    );
     notifyListeners();
   }
 
@@ -704,6 +742,17 @@ class AuthProvider extends ChangeNotifier {
     _remapCurrentAccountKeyIfNeeded(nextUser);
     _syncCurrentDriverAccessFromUser(nextUser);
     unawaited(_persistCurrentAccount());
+    unawaited(
+      TelemetryService.captureMessage(
+        "Profile updated",
+        category: "profile_update",
+        accountKey: _currentAccountKey,
+        role: nextUser.role.name,
+        context: {
+          "userId": nextUser.id,
+        },
+      ),
+    );
     notifyListeners();
   }
 
@@ -713,6 +762,15 @@ class AuthProvider extends ChangeNotifier {
       avatarPath: (avatarPath ?? "").trim().isEmpty ? "" : avatarPath!.trim(),
     );
     unawaited(_persistCurrentAccount());
+    unawaited(
+      TelemetryService.captureMessage(
+        "Avatar updated",
+        category: "profile_avatar",
+        accountKey: _currentAccountKey,
+        role: _user!.role.name,
+        context: {"userId": _user!.id},
+      ),
+    );
     notifyListeners();
   }
 
@@ -720,6 +778,15 @@ class AuthProvider extends ChangeNotifier {
     if (_user == null) return;
     _user = _user!.copyWith(languageCode: code);
     unawaited(_persistCurrentAccount());
+    unawaited(
+      TelemetryService.captureMessage(
+        "Language preference updated",
+        category: "preferences_language",
+        accountKey: _currentAccountKey,
+        role: _user!.role.name,
+        context: {"language": code},
+      ),
+    );
     notifyListeners();
   }
 
@@ -727,6 +794,15 @@ class AuthProvider extends ChangeNotifier {
     if (_user == null) return;
     _user = _user!.copyWith(mapThemeMode: mode);
     unawaited(_persistCurrentAccount());
+    unawaited(
+      TelemetryService.captureMessage(
+        "Map theme updated",
+        category: "preferences_map",
+        accountKey: _currentAccountKey,
+        role: _user!.role.name,
+        context: {"mapTheme": mode},
+      ),
+    );
     notifyListeners();
   }
 
@@ -772,17 +848,37 @@ class AuthProvider extends ChangeNotifier {
     _passwordUpdatedAt = DateTime.now();
     _syncCurrentDriverAccessPassword(nextNormalized);
     unawaited(_persistCurrentAccount());
+    unawaited(
+      TelemetryService.captureMessage(
+        "Password changed",
+        category: "security_password_change",
+        accountKey: _currentAccountKey,
+        role: _user?.role.name,
+        context: {"identity": identity},
+      ),
+    );
     notifyListeners();
     return null;
   }
 
   void logout() {
+    final accountKey = _currentAccountKey;
+    final role = _user?.role.name;
     _user = null;
     _password = "";
     _passwordUpdatedAt = null;
     _currentAccountKey = null;
     _currentDriverAccessId = null;
     _currentPasswordIdentity = null;
+    unawaited(_clearSessionSnapshot());
+    unawaited(
+      TelemetryService.captureMessage(
+        "User logout",
+        category: "auth_logout",
+        accountKey: accountKey,
+        role: role,
+      ),
+    );
     notifyListeners();
   }
 
@@ -793,10 +889,12 @@ class AuthProvider extends ChangeNotifier {
       if (_authorizedDrivers.isEmpty) {
         _restoreAuthorizedDriversFromAdminBackup();
         await _restoreAuthorizedDriversFromServerAdminBackup();
+        _restoreAuthorizedDriversFromStoredAccounts();
       }
       if (_authorizedDrivers.isNotEmpty) {
         await _persistAuthorizedDrivers();
         await _restoreAuthorizedDriversOnServer();
+        await _restoreDriverAccountProfilesOnServer();
         notifyListeners();
       }
       return;
@@ -823,6 +921,7 @@ class AuthProvider extends ChangeNotifier {
     await _persistAuthorizedDrivers();
     if (mergedProfiles.length > remote.length) {
       await _restoreAuthorizedDriversOnServer();
+      await _restoreDriverAccountProfilesOnServer();
     }
     notifyListeners();
   }
@@ -895,6 +994,10 @@ class AuthProvider extends ChangeNotifier {
       if (_authorizedDrivers.isEmpty) {
         shouldPersistDrivers = _restoreAuthorizedDriversFromAdminBackup();
       }
+      if (_restoreAuthorizedDriversFromStoredAccounts()) {
+        shouldPersistDrivers = true;
+      }
+      _restorePersistedSession(prefs);
       shouldPersistAccounts = true;
     } catch (_) {
       _authorizedDrivers.clear();
@@ -914,6 +1017,7 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> _persistAuthorizedDrivers() async {
     final prefs = await SharedPreferences.getInstance();
+    _syncAuthorizedDriversIntoStoredDriverAccounts();
     _syncAuthorizedDriversToAdminBackup();
     final serialized = jsonEncode(
       _authorizedDrivers.map((profile) => profile.toJson()).toList(),
@@ -927,6 +1031,67 @@ class AuthProvider extends ChangeNotifier {
   Future<void> _persistStoredAccounts() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_accountProfilesKey, jsonEncode(_storedAccounts));
+  }
+
+  Future<void> _persistSessionSnapshot() async {
+    final prefs = await SharedPreferences.getInstance();
+    final accountKey = _currentAccountKey;
+    if (_user == null || accountKey == null || accountKey.trim().isEmpty) {
+      await _clearSessionSnapshot();
+      return;
+    }
+    await prefs.setString(_activeSessionAccountKey, accountKey);
+    await prefs.setString(_activeSessionRoleKey, _user!.role.name);
+    if ((_currentDriverAccessId ?? "").trim().isNotEmpty) {
+      await prefs.setString(
+        _activeSessionDriverAccessIdKey,
+        _currentDriverAccessId!,
+      );
+    } else {
+      await prefs.remove(_activeSessionDriverAccessIdKey);
+    }
+  }
+
+  Future<void> _clearSessionSnapshot() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_activeSessionAccountKey);
+    await prefs.remove(_activeSessionRoleKey);
+    await prefs.remove(_activeSessionDriverAccessIdKey);
+  }
+
+  void _restorePersistedSession(SharedPreferences prefs) {
+    final accountKey = _nonEmpty(prefs.getString(_activeSessionAccountKey));
+    if (accountKey == null) return;
+
+    final stored = _secureStoredAccountRecord(accountKey, _storedAccounts[accountKey]);
+    final storedUser = _userFromStoredAccount(stored);
+    if (storedUser == null) return;
+
+    final roleText = prefs.getString(_activeSessionRoleKey);
+    final role = roleText == UserRole.admin.name
+        ? UserRole.admin
+        : storedUser.role;
+    final persistedDriverAccessId = _nonEmpty(
+      prefs.getString(_activeSessionDriverAccessIdKey),
+    );
+
+    _currentAccountKey = accountKey;
+    _currentDriverAccessId = role == UserRole.driver
+        ? (persistedDriverAccessId ??
+              _driverAccessIdForStoredUser(storedUser, accountKey: accountKey))
+        : null;
+    _currentPasswordIdentity =
+        _passwordIdentityFromStoredAccount(stored) ??
+        _resolvePasswordIdentity(
+          role: role,
+          accountKey: accountKey,
+          driverAccessId: _currentDriverAccessId,
+          storedUser: storedUser,
+        );
+    _password = _passwordFromStoredAccount(stored);
+    _passwordUpdatedAt =
+        _passwordUpdatedAtFromStoredAccount(stored) ?? DateTime.now();
+    _user = storedUser.copyWith(isOnline: true);
   }
 
   Future<List<DriverAccessProfile>?> _fetchAuthorizedDriversFromServer() async {
@@ -1100,23 +1265,17 @@ class AuthProvider extends ChangeNotifier {
         .toList(growable: false);
   }
 
-  Future<void> _saveStoredAccountToServer({
-    required String accountKey,
-    required UserModel user,
-  }) async {
-    await _saveStoredAccountRecordToServer(
-      accountKey: accountKey,
-      user: user,
-      passwordHash: _password,
-      passwordIdentity: _currentPasswordIdentity,
-      passwordUpdatedAt: _passwordUpdatedAt,
-    );
-  }
-
   Future<bool> _refreshDriverAccountProfilesFromServer() async {
-    final remoteProfiles = await _fetchStoredAccountsFromServer(role: "driver");
+    var remoteProfiles = await _fetchStoredAccountsFromServer(role: "driver");
     if (remoteProfiles == null || remoteProfiles.isEmpty) {
-      return false;
+      final restored = await _restoreDriverAccountProfilesOnServer();
+      if (!restored) {
+        return false;
+      }
+      remoteProfiles = await _fetchStoredAccountsFromServer(role: "driver");
+      if (remoteProfiles == null || remoteProfiles.isEmpty) {
+        return false;
+      }
     }
 
     var changed = false;
@@ -1171,6 +1330,17 @@ class AuthProvider extends ChangeNotifier {
     required DateTime? passwordUpdatedAt,
     Map<String, dynamic>? extraBody,
   }) async {
+    final effectiveExtraBody = <String, dynamic>{...?extraBody};
+    if (user.role == UserRole.driver &&
+        effectiveExtraBody["driverAccessSnapshot"] == null) {
+      final snapshot = _driverAccessSnapshotForUser(
+        user,
+        accountKey: accountKey,
+      );
+      if (snapshot != null) {
+        effectiveExtraBody["driverAccessSnapshot"] = snapshot.toJson();
+      }
+    }
     await _sendJsonRequest(
       method: "POST",
       path: "/accounts/profile/upsert",
@@ -1181,7 +1351,7 @@ class AuthProvider extends ChangeNotifier {
         "passwordIdentity": passwordIdentity,
         "passwordUpdatedAt": passwordUpdatedAt?.toIso8601String(),
         "user": user.toJson(),
-        ...?extraBody,
+        ...effectiveExtraBody,
       },
     );
   }
@@ -1236,15 +1406,30 @@ class AuthProvider extends ChangeNotifier {
     if (user == null || accountKey == null || accountKey.trim().isEmpty) {
       return;
     }
+    final driverSnapshot = user.role == UserRole.driver
+        ? _driverAccessSnapshotForUser(user, accountKey: accountKey)
+        : null;
     _storedAccounts[accountKey] = {
       "user": user.toJson(),
       "password": _password,
       "passwordIdentity": _currentPasswordIdentity,
       "passwordUpdatedAt": _passwordUpdatedAt?.toIso8601String(),
       "savedAt": DateTime.now().toIso8601String(),
+      if (driverSnapshot != null) "driverAccessSnapshot": driverSnapshot.toJson(),
     };
     await _persistStoredAccounts();
-    await _saveStoredAccountToServer(accountKey: accountKey, user: user);
+    await _persistSessionSnapshot();
+    await _saveStoredAccountRecordToServer(
+      accountKey: accountKey,
+      user: user,
+      passwordHash: _password,
+      passwordIdentity: _currentPasswordIdentity,
+      passwordUpdatedAt: _passwordUpdatedAt,
+      extraBody: {
+        if (driverSnapshot != null)
+          "driverAccessSnapshot": driverSnapshot.toJson(),
+      },
+    );
     if (user.role == UserRole.driver && _currentDriverAccessId != null) {
       await _saveAuthorizedDriverToServer(
         id: _currentDriverAccessId,
@@ -1292,6 +1477,30 @@ class AuthProvider extends ChangeNotifier {
       if (profile.id.isEmpty || profile.email.trim().isEmpty) continue;
       _upsertAuthorizedDriver(profile);
       restored = true;
+    }
+    return restored;
+  }
+
+  bool _restoreAuthorizedDriversFromStoredAccounts() {
+    var restored = false;
+    for (final entry in _storedAccounts.entries) {
+      final snapshot = _buildDriverAccessSnapshotFromStoredAccount(
+        entry.key,
+        entry.value,
+      );
+      if (snapshot == null) continue;
+      final before = _findAuthorizedDriverForEdit(
+        id: snapshot.id,
+        normalizedEmail: DriverAccessProfile.normalizeLookup(snapshot.email),
+      );
+      _upsertAuthorizedDriver(snapshot);
+      if (before == null ||
+          jsonEncode(before.toJson()) != jsonEncode(snapshot.toJson())) {
+        restored = true;
+      }
+    }
+    if (restored) {
+      _syncAuthorizedDriversToAdminBackup();
     }
     return restored;
   }
@@ -1353,6 +1562,35 @@ class AuthProvider extends ChangeNotifier {
     );
   }
 
+  Future<bool> _restoreDriverAccountProfilesOnServer() async {
+    var restored = false;
+    for (final entry in _storedAccounts.entries) {
+      final accountKey = entry.key;
+      final stored = _secureStoredAccountRecord(accountKey, entry.value);
+      final storedUser = _userFromStoredAccount(stored);
+      if (storedUser == null || storedUser.role != UserRole.driver) {
+        continue;
+      }
+      final snapshot = _buildDriverAccessSnapshotFromStoredAccount(
+        accountKey,
+        stored,
+      );
+      if (snapshot == null) continue;
+      await _saveStoredAccountRecordToServer(
+        accountKey: accountKey,
+        user: storedUser,
+        passwordHash: _passwordFromStoredAccount(stored),
+        passwordIdentity: _passwordIdentityFromStoredAccount(stored),
+        passwordUpdatedAt: _passwordUpdatedAtFromStoredAccount(stored),
+        extraBody: {
+          "driverAccessSnapshot": snapshot.toJson(),
+        },
+      );
+      restored = true;
+    }
+    return restored;
+  }
+
   void _upsertAuthorizedDriver(DriverAccessProfile profile) {
     final secureProfile = _secureDriverAccessProfile(profile);
     final normalizedEmail = DriverAccessProfile.normalizeLookup(profile.email);
@@ -1366,6 +1604,56 @@ class AuthProvider extends ChangeNotifier {
       return;
     }
     _authorizedDrivers.insert(0, secureProfile);
+  }
+
+  void _syncAuthorizedDriversIntoStoredDriverAccounts() {
+    for (final profile in _authorizedDrivers) {
+      final accountKey = _resolveAccountKey(
+        role: UserRole.driver,
+        loginIdentifier: profile.displayName,
+        email: profile.email,
+      );
+      final current = _secureStoredAccountRecord(
+        accountKey,
+        _storedAccounts[accountKey],
+      );
+      final currentUser = _userFromStoredAccount(current);
+      final nextUser =
+          currentUser?.role == UserRole.driver
+              ? currentUser!.copyWith(
+                  id: currentUser.id.isEmpty ? profile.id : currentUser.id,
+                  name: _nonEmpty(currentUser.name) ?? profile.displayName,
+                  legalName:
+                      _nonEmpty(currentUser.legalName) ?? profile.displayName,
+                  email: _nonEmpty(currentUser.email) ?? profile.email,
+                  phoneNumber:
+                      _nonEmpty(currentUser.phoneNumber) ??
+                      (profile.phoneNumber ?? ""),
+                  governmentId:
+                      _nonEmpty(currentUser.governmentId) ??
+                      (profile.governmentId ?? ""),
+                )
+              : UserModel(
+                  id: profile.id,
+                  name: profile.displayName,
+                  role: UserRole.driver,
+                  legalName: profile.displayName,
+                  email: profile.email,
+                  phoneNumber: profile.phoneNumber ?? "",
+                  address: "",
+                  governmentId: profile.governmentId ?? "",
+                  languageCode: "es",
+                  mapThemeMode: "flow",
+                  isOnline: true,
+                );
+      _storedAccounts[accountKey] = {
+        ...current,
+        "user": nextUser.toJson(),
+        "driverAccessSnapshot": profile.toJson(),
+        "savedAt":
+            current["savedAt"]?.toString() ?? DateTime.now().toIso8601String(),
+      };
+    }
   }
 
   void _remapCurrentAccountKeyIfNeeded(UserModel nextUser) {
@@ -1502,6 +1790,86 @@ class AuthProvider extends ChangeNotifier {
       if (DriverAccessProfile.normalizeLookup(profile.email) ==
           normalizedEmail) {
         return profile;
+      }
+    }
+    return null;
+  }
+
+  DriverAccessProfile? _driverAccessSnapshotForUser(
+    UserModel user, {
+    required String accountKey,
+  }) {
+    if (user.role != UserRole.driver) return null;
+    final normalizedEmail = DriverAccessProfile.normalizeLookup(user.email);
+    final accessId =
+        _driverAccessIdForStoredUser(user, accountKey: accountKey) ??
+        _nonEmpty(user.id);
+    for (final profile in _authorizedDrivers) {
+      final sameId = accessId != null && profile.id == accessId;
+      final sameEmail =
+          normalizedEmail.isNotEmpty &&
+          DriverAccessProfile.normalizeLookup(profile.email) == normalizedEmail;
+      if (!sameId && !sameEmail) continue;
+      return profile.copyWith(
+        displayName: _nonEmpty(user.legalName) ?? profile.displayName,
+        email: _nonEmpty(user.email) ?? profile.email,
+        phoneNumber: _nullableTrim(user.phoneNumber) ?? profile.phoneNumber,
+        governmentId: _nullableTrim(user.governmentId) ?? profile.governmentId,
+      );
+    }
+    return null;
+  }
+
+  DriverAccessProfile? _buildDriverAccessSnapshotFromStoredAccount(
+    String accountKey,
+    Map<String, dynamic>? stored,
+  ) {
+    final secureStored = _secureStoredAccountRecord(accountKey, stored);
+    final storedUser = _userFromStoredAccount(secureStored);
+    if (storedUser == null || storedUser.role != UserRole.driver) {
+      return null;
+    }
+    final rawSnapshot = secureStored["driverAccessSnapshot"];
+    if (rawSnapshot is Map) {
+      final snapshot = _secureDriverAccessProfile(
+        DriverAccessProfile.fromJson(rawSnapshot.cast<String, dynamic>()),
+      );
+      if (snapshot.id.isNotEmpty &&
+          snapshot.email.trim().isNotEmpty &&
+          snapshot.accessCode.trim().isNotEmpty) {
+        return snapshot.copyWith(
+          displayName: _nonEmpty(storedUser.legalName) ?? snapshot.displayName,
+          email: _nonEmpty(storedUser.email) ?? snapshot.email,
+          phoneNumber:
+              _nullableTrim(storedUser.phoneNumber) ?? snapshot.phoneNumber,
+          governmentId:
+              _nullableTrim(storedUser.governmentId) ?? snapshot.governmentId,
+        );
+      }
+    }
+    return _driverAccessSnapshotForUser(storedUser, accountKey: accountKey);
+  }
+
+  String? _driverAccessIdForStoredUser(
+    UserModel user, {
+    required String accountKey,
+  }) {
+    final normalizedEmail = DriverAccessProfile.normalizeLookup(user.email);
+    for (final profile in _authorizedDrivers) {
+      if (profile.id == user.id) return profile.id;
+      if (DriverAccessProfile.normalizeLookup(profile.email) == normalizedEmail) {
+        return profile.id;
+      }
+    }
+
+    final stored = _storedAccounts[accountKey];
+    final snapshotRaw = stored?["driverAccessSnapshot"];
+    if (snapshotRaw is Map) {
+      final profile = DriverAccessProfile.fromJson(
+        snapshotRaw.cast<String, dynamic>(),
+      );
+      if (profile.id.trim().isNotEmpty) {
+        return profile.id.trim();
       }
     }
     return null;

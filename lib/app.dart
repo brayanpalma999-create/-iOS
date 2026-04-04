@@ -11,6 +11,7 @@ import "providers/driver_provider.dart";
 import "providers/intercom_provider.dart";
 import "providers/map_ui_provider.dart";
 import "providers/operations_provider.dart";
+import "providers/support_provider.dart";
 import "providers/trip_provider.dart";
 import "routes.dart";
 import "services/beep_service.dart";
@@ -20,7 +21,9 @@ import "services/location_service.dart";
 import "services/map_service.dart";
 import "services/operations_service.dart";
 import "services/permission_service.dart";
+import "services/route_notification_service.dart";
 import "services/socket_service.dart";
+import "services/support_service.dart";
 import "services/trip_service.dart";
 import "utils/theme.dart";
 
@@ -74,7 +77,12 @@ class _AtoBAppState extends State<AtoBApp> with WidgetsBindingObserver {
         Provider<LocationService>(create: (_) => LocationService()),
         Provider<MapService>(create: (_) => MapService()),
         Provider<OperationsService>(create: (_) => OperationsService()),
+        Provider<SupportService>(create: (_) => SupportService()),
         Provider<BeepService>(create: (_) => BeepService()),
+        Provider<RouteNotificationService>(
+          create: (_) => RouteNotificationService()..initialize(),
+          dispose: (_, service) => service.dispose(),
+        ),
         Provider<LiveKitTokenService>(
           create: (_) => LiveKitTokenService(),
           dispose: (_, service) => service.dispose(),
@@ -92,6 +100,11 @@ class _AtoBAppState extends State<AtoBApp> with WidgetsBindingObserver {
             operationsService: context.read<OperationsService>(),
           ),
         ),
+        ChangeNotifierProvider<SupportProvider>(
+          create: (context) => SupportProvider(
+            supportService: context.read<SupportService>(),
+          ),
+        ),
         ChangeNotifierProxyProvider2<SocketService, TripService, TripProvider>(
           create: (context) => TripProvider(
             socketService: context.read<SocketService>(),
@@ -104,11 +117,12 @@ class _AtoBAppState extends State<AtoBApp> with WidgetsBindingObserver {
                 tripService: tripService,
               ),
         ),
-        ChangeNotifierProxyProvider4<
+        ChangeNotifierProxyProvider5<
           SocketService,
           LocationService,
           MapService,
           TripProvider,
+          RouteNotificationService,
           DriverProvider
         >(
           create: (context) => DriverProvider(
@@ -116,6 +130,7 @@ class _AtoBAppState extends State<AtoBApp> with WidgetsBindingObserver {
             locationService: context.read<LocationService>(),
             mapService: context.read<MapService>(),
             tripProvider: context.read<TripProvider>(),
+            routeNotificationService: context.read<RouteNotificationService>(),
           ),
           update:
               (
@@ -124,6 +139,7 @@ class _AtoBAppState extends State<AtoBApp> with WidgetsBindingObserver {
                 locationService,
                 mapService,
                 tripProvider,
+                routeNotificationService,
                 previous,
               ) =>
                   previous ??
@@ -132,6 +148,7 @@ class _AtoBAppState extends State<AtoBApp> with WidgetsBindingObserver {
                     locationService: locationService,
                     mapService: mapService,
                     tripProvider: tripProvider,
+                    routeNotificationService: routeNotificationService,
                   ),
         ),
         ChangeNotifierProxyProvider2<

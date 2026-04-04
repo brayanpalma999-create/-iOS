@@ -26,6 +26,8 @@ dependencies:
   livekit_client: ^2.7.0
   crypto: ^3.0.6
   flutter_compass: ^0.8.1
+  sentry_flutter: ^9.7.0
+  flutter_local_notifications: ^19.4.0
 
 dev_dependencies:
   flutter_test:

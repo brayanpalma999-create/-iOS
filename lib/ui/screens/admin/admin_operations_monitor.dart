@@ -118,6 +118,14 @@ class _AdminOperationsMonitorPageState
                           label: t(es: "Completados", en: "Completed"),
                           value: "${summary.counts.completedTrips}",
                         ),
+                        _MetricCard(
+                          label: t(es: "Soporte", en: "Support"),
+                          value: "${summary.counts.supportTickets}",
+                        ),
+                        _MetricCard(
+                          label: t(es: "Telemetria", en: "Telemetry"),
+                          value: "${summary.counts.telemetryEvents}",
+                        ),
                       ],
                     ),
                     const SizedBox(height: 12),
@@ -153,6 +161,18 @@ class _AdminOperationsMonitorPageState
                                 text:
                                     "${t(es: "Persistencia", en: "Persistence")}: ${summary.system.persistenceMode}",
                                 good: summary.system.isStorageHealthy,
+                              ),
+                              _Badge(
+                                text: summary.system.pushConfigured
+                                    ? t(es: "Push listo", en: "Push ready")
+                                    : t(es: "Push pendiente", en: "Push pending"),
+                                good: summary.system.pushConfigured,
+                              ),
+                              _Badge(
+                                text: summary.system.sentryConfigured
+                                    ? t(es: "Telemetry lista", en: "Telemetry ready")
+                                    : t(es: "Telemetry local", en: "Local telemetry"),
+                                good: summary.system.sentryConfigured,
                               ),
                             ],
                           ),
@@ -202,6 +222,58 @@ class _AdminOperationsMonitorPageState
                         },
                       ),
                     ),
+                    const SizedBox(height: 12),
+                    _SectionTitle(
+                      t(es: "Soporte reciente", en: "Recent support"),
+                    ),
+                    const SizedBox(height: 8),
+                    if (summary.recentSupport.isEmpty)
+                      _Panel(
+                        child: Text(
+                          t(
+                            es: "No hay tickets recientes.",
+                            en: "There are no recent tickets.",
+                          ),
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                      )
+                    else
+                      ...summary.recentSupport.map(
+                        (item) => _EventTile(
+                          title: item.title,
+                          body: "${item.userName} • ${item.priority} • ${item.status}",
+                          stamp: _stamp(item.updatedAt),
+                          color: item.status == "resolved"
+                              ? const Color(0xFF41D891)
+                              : const Color(0xFFFFC857),
+                        ),
+                      ),
+                    const SizedBox(height: 12),
+                    _SectionTitle(
+                      t(es: "Errores cliente", en: "Client errors"),
+                    ),
+                    const SizedBox(height: 8),
+                    if (summary.recentTelemetry.isEmpty)
+                      _Panel(
+                        child: Text(
+                          t(
+                            es: "No hay errores recientes de cliente.",
+                            en: "There are no recent client errors.",
+                          ),
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                      )
+                    else
+                      ...summary.recentTelemetry.map(
+                        (item) => _EventTile(
+                          title: item.title.isEmpty ? item.type : item.title,
+                          body: item.message.isEmpty ? item.type : item.message,
+                          stamp: _stamp(item.createdAt),
+                          color: item.severity == "error"
+                              ? const Color(0xFFFF7C8C)
+                              : const Color(0xFF72BBFF),
+                        ),
+                      ),
                     const SizedBox(height: 12),
                     _SectionTitle(
                       t(es: "Top drivers", en: "Top drivers"),

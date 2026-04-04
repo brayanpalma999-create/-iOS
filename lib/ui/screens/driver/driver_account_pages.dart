@@ -14,6 +14,8 @@ import "../../widgets/custom_button.dart";
 import "../../widgets/custom_input.dart";
 import "../../widgets/group_inbox_thread.dart";
 
+const String _vehicleOtherKey = "Other";
+
 const Map<String, List<String>> _vehicleModelsByMake = {
   "Toyota": ["Corolla", "Camry", "Prius", "RAV4", "Highlander", "Sienna"],
   "Honda": ["Civic", "Accord", "CR-V", "Pilot", "Odyssey", "Fit"],
@@ -25,7 +27,7 @@ const Map<String, List<String>> _vehicleModelsByMake = {
   "Tesla": ["Model 3", "Model Y", "Model S", "Model X"],
   "Mazda": ["Mazda3", "Mazda6", "CX-3", "CX-5", "CX-9"],
   "Volkswagen": ["Jetta", "Passat", "Taos", "Tiguan", "Atlas"],
-  "Otro": ["Sedan", "SUV", "Pickup", "Van", "Hatchback", "Coupe"],
+  _vehicleOtherKey: [],
 };
 
 const List<String> _vehicleColors = [
@@ -57,6 +59,8 @@ class _DriverProfileSettingsPageState extends State<DriverProfileSettingsPage> {
   final _addressCtrl = TextEditingController();
   final _governmentIdCtrl = TextEditingController();
   final _vehiclePlateCtrl = TextEditingController();
+  final _vehicleOtherMakeCtrl = TextEditingController();
+  final _vehicleOtherModelCtrl = TextEditingController();
   final ImagePicker _picker = ImagePicker();
   bool _seeded = false;
   bool _updatingAvatar = false;
@@ -79,7 +83,11 @@ class _DriverProfileSettingsPageState extends State<DriverProfileSettingsPage> {
     _governmentIdCtrl.text = user?.governmentId ?? "";
     _vehiclePlateCtrl.text = user?.vehiclePlate ?? "";
     _vehicleMake = _safeVehicleMake(user?.vehicleMake);
+    _vehicleOtherMakeCtrl.text =
+        _vehicleMake == _vehicleOtherKey ? (user?.vehicleMake ?? "") : "";
     _vehicleModel = _safeVehicleModel(_vehicleMake, user?.vehicleModel);
+    _vehicleOtherModelCtrl.text =
+        _vehicleModel == _vehicleOtherKey ? (user?.vehicleModel ?? "") : "";
     _vehicleColor = _safeVehicleColor(user?.vehicleColor);
     _vehicleYear = _safeVehicleYear(user?.vehicleYear);
   }
@@ -93,6 +101,8 @@ class _DriverProfileSettingsPageState extends State<DriverProfileSettingsPage> {
     _addressCtrl.dispose();
     _governmentIdCtrl.dispose();
     _vehiclePlateCtrl.dispose();
+    _vehicleOtherMakeCtrl.dispose();
+    _vehicleOtherModelCtrl.dispose();
     super.dispose();
   }
 
@@ -107,14 +117,17 @@ class _DriverProfileSettingsPageState extends State<DriverProfileSettingsPage> {
   String? _safeVehicleMake(String? value) {
     final clean = value?.trim();
     if (clean == null || clean.isEmpty) return null;
-    return _vehicleModelsByMake.containsKey(clean) ? clean : "Otro";
+    if (clean == "Otro") return _vehicleOtherKey;
+    return _vehicleModelsByMake.containsKey(clean) ? clean : _vehicleOtherKey;
   }
 
   String? _safeVehicleModel(String? make, String? value) {
     final clean = value?.trim();
     if (make == null || clean == null || clean.isEmpty) return null;
+    if (clean == "Otro") return _vehicleOtherKey;
+    if (make == _vehicleOtherKey) return _vehicleOtherKey;
     final models = _vehicleModelsByMake[make] ?? const <String>[];
-    return models.contains(clean) ? clean : null;
+    return models.contains(clean) ? clean : _vehicleOtherKey;
   }
 
   String? _safeVehicleColor(String? value) {
@@ -127,6 +140,36 @@ class _DriverProfileSettingsPageState extends State<DriverProfileSettingsPage> {
     final clean = value?.trim();
     if (clean == null || clean.isEmpty) return null;
     return _vehicleYears.contains(clean) ? clean : null;
+  }
+
+  List<String> _vehicleModelOptionsFor(String? make) {
+    if (make == null) return const <String>[];
+    if (make == _vehicleOtherKey) return const <String>[_vehicleOtherKey];
+    final models = List<String>.from(_vehicleModelsByMake[make] ?? const <String>[]);
+    if (!models.contains(_vehicleOtherKey)) {
+      models.add(_vehicleOtherKey);
+    }
+    return models;
+  }
+
+  String? get _resolvedVehicleMake {
+    if (_vehicleMake == null) return null;
+    if (_vehicleMake == _vehicleOtherKey) {
+      return _vehicleOtherMakeCtrl.text.trim().isEmpty
+          ? null
+          : _vehicleOtherMakeCtrl.text.trim();
+    }
+    return _vehicleMake;
+  }
+
+  String? get _resolvedVehicleModel {
+    if (_vehicleModel == null) return null;
+    if (_vehicleModel == _vehicleOtherKey) {
+      return _vehicleOtherModelCtrl.text.trim().isEmpty
+          ? null
+          : _vehicleOtherModelCtrl.text.trim();
+    }
+    return _vehicleModel;
   }
 
   Future<void> _pickAvatar() async {
@@ -157,8 +200,8 @@ class _DriverProfileSettingsPageState extends State<DriverProfileSettingsPage> {
       phoneNumber: _phoneCtrl.text,
       address: _addressCtrl.text,
       governmentId: _governmentIdCtrl.text,
-      vehicleMake: _vehicleMake,
-      vehicleModel: _vehicleModel,
+      vehicleMake: _resolvedVehicleMake,
+      vehicleModel: _resolvedVehicleModel,
       vehicleColor: _vehicleColor,
       vehiclePlate: _vehiclePlateCtrl.text,
       vehicleYear: _vehicleYear,
@@ -275,20 +318,42 @@ class _DriverProfileSettingsPageState extends State<DriverProfileSettingsPage> {
                         .map(
                           (make) => DropdownMenuItem<String>(
                             value: make,
-                            child: Text(make),
+                            child: Text(
+                              make == _vehicleOtherKey
+                                  ? t(es: "Other", en: "Other")
+                                  : make,
+                            ),
                           ),
                         )
                         .toList(),
                     onChanged: (value) {
                       setState(() {
                         _vehicleMake = value;
-                        final models = _vehicleModelsByMake[value] ?? const <String>[];
-                        if (!models.contains(_vehicleModel)) {
-                          _vehicleModel = null;
+                        if (value == _vehicleOtherKey) {
+                          _vehicleModel = _vehicleOtherKey;
+                        } else {
+                          final models = _vehicleModelOptionsFor(value);
+                          if (!models.contains(_vehicleModel)) {
+                            _vehicleModel = null;
+                          }
+                        }
+                        if (value != _vehicleOtherKey) {
+                          _vehicleOtherMakeCtrl.clear();
+                        }
+                        if (_vehicleModel != _vehicleOtherKey) {
+                          _vehicleOtherModelCtrl.clear();
                         }
                       });
                     },
                   ),
+                  if (_vehicleMake == _vehicleOtherKey) ...[
+                    const SizedBox(height: 10),
+                    CustomInput(
+                      controller: _vehicleOtherMakeCtrl,
+                      hint: t(es: "Escribe la marca", en: "Enter make"),
+                      prefixIcon: Icons.edit_rounded,
+                    ),
+                  ],
                   const SizedBox(height: 10),
                   DropdownButtonFormField<String>(
                     key: ValueKey<String?>("vehicle-model-$_vehicleMake-$_vehicleModel"),
@@ -298,18 +363,35 @@ class _DriverProfileSettingsPageState extends State<DriverProfileSettingsPage> {
                       labelText: t(es: "Modelo", en: "Model"),
                       prefixIcon: const Icon(Icons.local_taxi_outlined),
                     ),
-                    items: (_vehicleModelsByMake[_vehicleMake] ?? const <String>[])
+                    items: _vehicleModelOptionsFor(_vehicleMake)
                         .map(
                           (model) => DropdownMenuItem<String>(
                             value: model,
-                            child: Text(model),
+                            child: Text(
+                              model == _vehicleOtherKey
+                                  ? t(es: "Other", en: "Other")
+                                  : model,
+                            ),
                           ),
                         )
                         .toList(),
                     onChanged: _vehicleMake == null
                         ? null
-                        : (value) => setState(() => _vehicleModel = value),
+                        : (value) => setState(() {
+                            _vehicleModel = value;
+                            if (value != _vehicleOtherKey) {
+                              _vehicleOtherModelCtrl.clear();
+                            }
+                          }),
                   ),
+                  if (_vehicleModel == _vehicleOtherKey) ...[
+                    const SizedBox(height: 10),
+                    CustomInput(
+                      controller: _vehicleOtherModelCtrl,
+                      hint: t(es: "Escribe el modelo", en: "Enter model"),
+                      prefixIcon: Icons.edit_rounded,
+                    ),
+                  ],
                   const SizedBox(height: 10),
                   Row(
                     children: [

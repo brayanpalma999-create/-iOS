@@ -10,6 +10,8 @@ class OperationsCountModel {
     required this.completedTrips,
     required this.auditEvents,
     required this.notifications,
+    required this.supportTickets,
+    required this.telemetryEvents,
   });
 
   final int onlineDrivers;
@@ -22,6 +24,8 @@ class OperationsCountModel {
   final int completedTrips;
   final int auditEvents;
   final int notifications;
+  final int supportTickets;
+  final int telemetryEvents;
 
   factory OperationsCountModel.fromJson(Map<String, dynamic> json) {
     int value(String key) => (json[key] as num?)?.toInt() ?? 0;
@@ -36,6 +40,8 @@ class OperationsCountModel {
       completedTrips: value("completedTrips"),
       auditEvents: value("auditEvents"),
       notifications: value("notifications"),
+      supportTickets: value("supportTickets"),
+      telemetryEvents: value("telemetryEvents"),
     );
   }
 }
@@ -43,29 +49,42 @@ class OperationsCountModel {
 class OperationsSystemModel {
   const OperationsSystemModel({
     required this.persistenceMode,
+    required this.databasePath,
+    required this.databaseReady,
     required this.renderRuntime,
     required this.persistentDisk,
     required this.inviteEmailConfigured,
     required this.liveKitConfigured,
+    required this.pushConfigured,
+    required this.sentryConfigured,
     this.warning,
   });
 
   final String persistenceMode;
+  final String databasePath;
+  final bool databaseReady;
   final bool renderRuntime;
   final bool persistentDisk;
   final bool inviteEmailConfigured;
   final bool liveKitConfigured;
+  final bool pushConfigured;
+  final bool sentryConfigured;
   final String? warning;
 
-  bool get isStorageHealthy => !renderRuntime || persistentDisk;
+  bool get isStorageHealthy =>
+      databaseReady && (!renderRuntime || persistentDisk);
 
   factory OperationsSystemModel.fromJson(Map<String, dynamic> json) {
     return OperationsSystemModel(
       persistenceMode: json["persistenceMode"]?.toString() ?? "filesystem",
+      databasePath: json["databasePath"]?.toString() ?? "",
+      databaseReady: json["databaseReady"] as bool? ?? false,
       renderRuntime: json["renderRuntime"] as bool? ?? false,
       persistentDisk: json["persistentDisk"] as bool? ?? false,
       inviteEmailConfigured: json["inviteEmailConfigured"] as bool? ?? false,
       liveKitConfigured: json["liveKitConfigured"] as bool? ?? false,
+      pushConfigured: json["pushConfigured"] as bool? ?? false,
+      sentryConfigured: json["sentryConfigured"] as bool? ?? false,
       warning: json["warning"]?.toString(),
     );
   }
@@ -176,6 +195,37 @@ class DriverPerformanceModel {
   }
 }
 
+class SupportSummaryModel {
+  const SupportSummaryModel({
+    required this.id,
+    required this.title,
+    required this.status,
+    required this.priority,
+    required this.userName,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String title;
+  final String status;
+  final String priority;
+  final String userName;
+  final DateTime updatedAt;
+
+  factory SupportSummaryModel.fromJson(Map<String, dynamic> json) {
+    return SupportSummaryModel(
+      id: json["id"]?.toString() ?? "",
+      title: json["title"]?.toString() ?? "",
+      status: json["status"]?.toString() ?? "open",
+      priority: json["priority"]?.toString() ?? "normal",
+      userName: json["userName"]?.toString() ?? "",
+      updatedAt:
+          DateTime.tryParse(json["updatedAt"]?.toString() ?? "") ??
+          DateTime.now(),
+    );
+  }
+}
+
 class OperationsSummaryModel {
   const OperationsSummaryModel({
     required this.generatedAt,
@@ -183,6 +233,8 @@ class OperationsSummaryModel {
     required this.system,
     required this.recentAudit,
     required this.recentNotifications,
+    required this.recentSupport,
+    required this.recentTelemetry,
     required this.driverPerformance,
   });
 
@@ -191,6 +243,8 @@ class OperationsSummaryModel {
   final OperationsSystemModel system;
   final List<OperationsEventModel> recentAudit;
   final List<OperationsNotificationModel> recentNotifications;
+  final List<SupportSummaryModel> recentSupport;
+  final List<OperationsEventModel> recentTelemetry;
   final List<DriverPerformanceModel> driverPerformance;
 
   factory OperationsSummaryModel.fromJson(Map<String, dynamic> json) {
@@ -222,6 +276,14 @@ class OperationsSummaryModel {
       recentNotifications: parseList(
         "recentNotifications",
         OperationsNotificationModel.fromJson,
+      ),
+      recentSupport: parseList(
+        "recentSupport",
+        SupportSummaryModel.fromJson,
+      ),
+      recentTelemetry: parseList(
+        "recentTelemetry",
+        OperationsEventModel.fromJson,
       ),
       driverPerformance: parseList(
         "driverPerformance",

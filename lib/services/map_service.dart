@@ -376,13 +376,17 @@ class MapService {
       if (path.length < 2) {
         return _calculateRouteWithOsrm(origin: origin, destination: destination);
       }
+      final compactPath = _compactPolyline(path);
+      if (!_isUsableRoutePath(compactPath, origin: origin, destination: destination)) {
+        return _calculateRouteWithOsrm(origin: origin, destination: destination);
+      }
       final steps = _extractRouteSteps(map);
 
       return RouteEstimate(
         distanceMiles: miles,
         durationMinutes: seconds / 60,
         fareUsd: fare,
-        path: _compactPolyline(path),
+        path: compactPath,
         steps: steps,
       );
     } catch (_) {
@@ -507,12 +511,16 @@ class MapService {
       if (path.length < 2) {
         return null;
       }
+      final compactPath = _compactPolyline(path);
+      if (!_isUsableRoutePath(compactPath, origin: origin, destination: destination)) {
+        return null;
+      }
       final steps = _extractRouteSteps(map);
       return RouteEstimate(
         distanceMiles: miles,
         durationMinutes: seconds / 60,
         fareUsd: fare,
-        path: _compactPolyline(path),
+        path: compactPath,
         steps: steps,
       );
     } catch (_) {
@@ -636,6 +644,40 @@ class MapService {
       result.add(current);
     }
     return result;
+  }
+
+  bool _isUsableRoutePath(
+    List<LatLng> path, {
+    required LatLng origin,
+    required LatLng destination,
+  }) {
+    if (path.length < 3) return false;
+    final distance = const Distance();
+    final originOffset = distance.as(LengthUnit.Meter, path.first, origin);
+    final destinationOffset = distance.as(
+      LengthUnit.Meter,
+      path.last,
+      destination,
+    );
+    if (originOffset > 120 || destinationOffset > 120) {
+      return false;
+    }
+
+    final straightMeters = distance.as(LengthUnit.Meter, origin, destination);
+    final traveledMeters = _polylineMeters(path);
+    if (traveledMeters <= 0) return false;
+    if (traveledMeters + 8 < straightMeters) return false;
+    return true;
+  }
+
+  double _polylineMeters(List<LatLng> points) {
+    if (points.length < 2) return 0;
+    final distance = const Distance();
+    var meters = 0.0;
+    for (var i = 1; i < points.length; i++) {
+      meters += distance.as(LengthUnit.Meter, points[i - 1], points[i]);
+    }
+    return meters;
   }
 
   List<RouteStepModel> _extractRouteSteps(Map<String, dynamic> route) {

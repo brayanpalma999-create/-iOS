@@ -197,17 +197,6 @@ class TripProvider extends ChangeNotifier {
         : normalized["status"];
     normalized["createdAt"] =
         normalized["createdAt"]?.toString() ?? DateTime.now().toIso8601String();
-    final routePoints = normalized["routePoints"];
-    final missingPath = routePoints is! List || routePoints.isEmpty;
-    if (missingPath &&
-        normalized["originLocation"] is Map &&
-        normalized["destinationLocation"] is Map) {
-      normalized["routePoints"] = [
-        normalized["originLocation"],
-        normalized["destinationLocation"],
-      ];
-    }
-
     final trip = TripModel.fromJson(normalized);
     _tripService.upsertTrip(trip);
     unawaited(_persistLocalTrips());

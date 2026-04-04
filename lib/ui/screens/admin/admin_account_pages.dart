@@ -16,6 +16,33 @@ import "../../widgets/custom_button.dart";
 import "../../widgets/custom_input.dart";
 import "../../widgets/group_inbox_thread.dart";
 
+const String _vehicleOtherKey = "Other";
+const Map<String, List<String>> _vehicleModelsByMake = {
+  "Toyota": ["Corolla", "Camry", "Prius", "RAV4", "Highlander", "Sienna"],
+  "Honda": ["Civic", "Accord", "CR-V", "Pilot", "Odyssey", "Fit"],
+  "Nissan": ["Versa", "Sentra", "Altima", "Rogue", "Murano", "Pathfinder"],
+  "Hyundai": ["Accent", "Elantra", "Sonata", "Tucson", "Santa Fe", "Palisade"],
+  "Kia": ["Rio", "Forte", "K5", "Soul", "Sportage", "Telluride"],
+  "Chevrolet": ["Spark", "Malibu", "Cruze", "Trax", "Equinox", "Tahoe"],
+  "Ford": ["Focus", "Fusion", "Escape", "Explorer", "Edge", "Maverick"],
+  "Tesla": ["Model 3", "Model Y", "Model S", "Model X"],
+  "Mazda": ["Mazda3", "Mazda6", "CX-3", "CX-5", "CX-9"],
+  "Volkswagen": ["Jetta", "Passat", "Taos", "Tiguan", "Atlas"],
+  _vehicleOtherKey: [],
+};
+const List<String> _vehicleColors = [
+  "Negro",
+  "Blanco",
+  "Gris",
+  "Plata",
+  "Azul",
+  "Rojo",
+  "Verde",
+  "Cafe",
+  "Beige",
+  "Dorado",
+];
+
 class AdminProfileSettingsPage extends StatefulWidget {
   const AdminProfileSettingsPage({super.key});
 
@@ -851,13 +878,15 @@ class _AdminDriverRecordEditPageState extends State<AdminDriverRecordEditPage> {
   final _phoneCtrl = TextEditingController();
   final _addressCtrl = TextEditingController();
   final _governmentIdCtrl = TextEditingController();
-  final _vehicleMakeCtrl = TextEditingController();
-  final _vehicleModelCtrl = TextEditingController();
-  final _vehicleColorCtrl = TextEditingController();
   final _vehiclePlateCtrl = TextEditingController();
-  final _vehicleYearCtrl = TextEditingController();
+  final _vehicleOtherMakeCtrl = TextEditingController();
+  final _vehicleOtherModelCtrl = TextEditingController();
   final _newPasswordCtrl = TextEditingController();
   bool _saving = false;
+  String? _vehicleMake;
+  String? _vehicleModel;
+  String? _vehicleColor;
+  String? _vehicleYear;
 
   @override
   void initState() {
@@ -869,11 +898,15 @@ class _AdminDriverRecordEditPageState extends State<AdminDriverRecordEditPage> {
     _phoneCtrl.text = user.phoneNumber;
     _addressCtrl.text = user.address;
     _governmentIdCtrl.text = user.governmentId;
-    _vehicleMakeCtrl.text = user.vehicleMake ?? "";
-    _vehicleModelCtrl.text = user.vehicleModel ?? "";
-    _vehicleColorCtrl.text = user.vehicleColor ?? "";
     _vehiclePlateCtrl.text = user.vehiclePlate ?? "";
-    _vehicleYearCtrl.text = user.vehicleYear ?? "";
+    _vehicleMake = _safeVehicleMake(user.vehicleMake);
+    _vehicleOtherMakeCtrl.text =
+        _vehicleMake == _vehicleOtherKey ? (user.vehicleMake ?? "") : "";
+    _vehicleModel = _safeVehicleModel(_vehicleMake, user.vehicleModel);
+    _vehicleOtherModelCtrl.text =
+        _vehicleModel == _vehicleOtherKey ? (user.vehicleModel ?? "") : "";
+    _vehicleColor = _safeVehicleColor(user.vehicleColor);
+    _vehicleYear = _safeVehicleYear(user.vehicleYear);
   }
 
   @override
@@ -884,13 +917,77 @@ class _AdminDriverRecordEditPageState extends State<AdminDriverRecordEditPage> {
     _phoneCtrl.dispose();
     _addressCtrl.dispose();
     _governmentIdCtrl.dispose();
-    _vehicleMakeCtrl.dispose();
-    _vehicleModelCtrl.dispose();
-    _vehicleColorCtrl.dispose();
     _vehiclePlateCtrl.dispose();
-    _vehicleYearCtrl.dispose();
+    _vehicleOtherMakeCtrl.dispose();
+    _vehicleOtherModelCtrl.dispose();
     _newPasswordCtrl.dispose();
     super.dispose();
+  }
+
+  List<String> get _vehicleYears {
+    final currentYear = DateTime.now().year + 1;
+    return List<String>.generate(
+      currentYear - 1999,
+      (index) => (currentYear - index).toString(),
+    );
+  }
+
+  String? _safeVehicleMake(String? value) {
+    final clean = value?.trim();
+    if (clean == null || clean.isEmpty) return null;
+    if (clean == "Otro") return _vehicleOtherKey;
+    return _vehicleModelsByMake.containsKey(clean) ? clean : _vehicleOtherKey;
+  }
+
+  String? _safeVehicleModel(String? make, String? value) {
+    final clean = value?.trim();
+    if (make == null || clean == null || clean.isEmpty) return null;
+    if (clean == "Otro") return _vehicleOtherKey;
+    if (make == _vehicleOtherKey) return _vehicleOtherKey;
+    final models = _vehicleModelsByMake[make] ?? const <String>[];
+    return models.contains(clean) ? clean : _vehicleOtherKey;
+  }
+
+  String? _safeVehicleColor(String? value) {
+    final clean = value?.trim();
+    if (clean == null || clean.isEmpty) return null;
+    return _vehicleColors.contains(clean) ? clean : null;
+  }
+
+  String? _safeVehicleYear(String? value) {
+    final clean = value?.trim();
+    if (clean == null || clean.isEmpty) return null;
+    return _vehicleYears.contains(clean) ? clean : null;
+  }
+
+  List<String> _vehicleModelOptionsFor(String? make) {
+    if (make == null) return const <String>[];
+    if (make == _vehicleOtherKey) return const <String>[_vehicleOtherKey];
+    final models = List<String>.from(_vehicleModelsByMake[make] ?? const <String>[]);
+    if (!models.contains(_vehicleOtherKey)) {
+      models.add(_vehicleOtherKey);
+    }
+    return models;
+  }
+
+  String? get _resolvedVehicleMake {
+    if (_vehicleMake == null) return null;
+    if (_vehicleMake == _vehicleOtherKey) {
+      return _vehicleOtherMakeCtrl.text.trim().isEmpty
+          ? null
+          : _vehicleOtherMakeCtrl.text.trim();
+    }
+    return _vehicleMake;
+  }
+
+  String? get _resolvedVehicleModel {
+    if (_vehicleModel == null) return null;
+    if (_vehicleModel == _vehicleOtherKey) {
+      return _vehicleOtherModelCtrl.text.trim().isEmpty
+          ? null
+          : _vehicleOtherModelCtrl.text.trim();
+    }
+    return _vehicleModel;
   }
 
   Future<void> _save() async {
@@ -907,11 +1004,11 @@ class _AdminDriverRecordEditPageState extends State<AdminDriverRecordEditPage> {
         phoneNumber: _phoneCtrl.text,
         governmentId: _governmentIdCtrl.text,
         address: _addressCtrl.text,
-        vehicleMake: _vehicleMakeCtrl.text,
-        vehicleModel: _vehicleModelCtrl.text,
-        vehicleColor: _vehicleColorCtrl.text,
+        vehicleMake: _resolvedVehicleMake,
+        vehicleModel: _resolvedVehicleModel,
+        vehicleColor: _vehicleColor,
         vehiclePlate: _vehiclePlateCtrl.text,
-        vehicleYear: _vehicleYearCtrl.text,
+        vehicleYear: _vehicleYear,
         newPassword: _newPasswordCtrl.text,
       );
       if (!mounted) return;
@@ -986,22 +1083,110 @@ class _AdminDriverRecordEditPageState extends State<AdminDriverRecordEditPage> {
             prefixIcon: Icons.credit_card_outlined,
           ),
           const SizedBox(height: 10),
-          CustomInput(
-            controller: _vehicleMakeCtrl,
-            hint: t(es: "Marca", en: "Make"),
-            prefixIcon: Icons.directions_car_outlined,
+          DropdownButtonFormField<String>(
+            key: ValueKey<String?>("admin-vehicle-make-$_vehicleMake"),
+            initialValue: _vehicleMake,
+            dropdownColor: const Color(0xFF111315),
+            decoration: InputDecoration(
+              labelText: t(es: "Marca", en: "Make"),
+              prefixIcon: const Icon(Icons.directions_car_outlined),
+            ),
+            items: _vehicleModelsByMake.keys
+                .map(
+                  (make) => DropdownMenuItem<String>(
+                    value: make,
+                    child: Text(
+                      make == _vehicleOtherKey
+                          ? t(es: "Other", en: "Other")
+                          : make,
+                    ),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              setState(() {
+                _vehicleMake = value;
+                if (value == _vehicleOtherKey) {
+                  _vehicleModel = _vehicleOtherKey;
+                } else {
+                  final models = _vehicleModelOptionsFor(value);
+                  if (!models.contains(_vehicleModel)) {
+                    _vehicleModel = null;
+                  }
+                }
+                if (value != _vehicleOtherKey) {
+                  _vehicleOtherMakeCtrl.clear();
+                }
+                if (_vehicleModel != _vehicleOtherKey) {
+                  _vehicleOtherModelCtrl.clear();
+                }
+              });
+            },
           ),
+          if (_vehicleMake == _vehicleOtherKey) ...[
+            const SizedBox(height: 10),
+            CustomInput(
+              controller: _vehicleOtherMakeCtrl,
+              hint: t(es: "Escribe la marca", en: "Enter make"),
+              prefixIcon: Icons.edit_rounded,
+            ),
+          ],
           const SizedBox(height: 10),
-          CustomInput(
-            controller: _vehicleModelCtrl,
-            hint: t(es: "Modelo", en: "Model"),
-            prefixIcon: Icons.commute_outlined,
+          DropdownButtonFormField<String>(
+            key: ValueKey<String?>("admin-vehicle-model-$_vehicleMake-$_vehicleModel"),
+            initialValue: _vehicleModel,
+            dropdownColor: const Color(0xFF111315),
+            decoration: InputDecoration(
+              labelText: t(es: "Modelo", en: "Model"),
+              prefixIcon: const Icon(Icons.commute_outlined),
+            ),
+            items: _vehicleModelOptionsFor(_vehicleMake)
+                .map(
+                  (model) => DropdownMenuItem<String>(
+                    value: model,
+                    child: Text(
+                      model == _vehicleOtherKey
+                          ? t(es: "Other", en: "Other")
+                          : model,
+                    ),
+                  ),
+                )
+                .toList(),
+            onChanged: _vehicleMake == null
+                ? null
+                : (value) => setState(() {
+                    _vehicleModel = value;
+                    if (value != _vehicleOtherKey) {
+                      _vehicleOtherModelCtrl.clear();
+                    }
+                  }),
           ),
+          if (_vehicleModel == _vehicleOtherKey) ...[
+            const SizedBox(height: 10),
+            CustomInput(
+              controller: _vehicleOtherModelCtrl,
+              hint: t(es: "Escribe el modelo", en: "Enter model"),
+              prefixIcon: Icons.edit_rounded,
+            ),
+          ],
           const SizedBox(height: 10),
-          CustomInput(
-            controller: _vehicleColorCtrl,
-            hint: t(es: "Color", en: "Color"),
-            prefixIcon: Icons.palette_outlined,
+          DropdownButtonFormField<String>(
+            key: ValueKey<String?>("admin-vehicle-color-$_vehicleColor"),
+            initialValue: _vehicleColor,
+            dropdownColor: const Color(0xFF111315),
+            decoration: InputDecoration(
+              labelText: t(es: "Color", en: "Color"),
+              prefixIcon: const Icon(Icons.palette_outlined),
+            ),
+            items: _vehicleColors
+                .map(
+                  (color) => DropdownMenuItem<String>(
+                    value: color,
+                    child: Text(color),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) => setState(() => _vehicleColor = value),
           ),
           const SizedBox(height: 10),
           CustomInput(
@@ -1010,10 +1195,23 @@ class _AdminDriverRecordEditPageState extends State<AdminDriverRecordEditPage> {
             prefixIcon: Icons.pin_outlined,
           ),
           const SizedBox(height: 10),
-          CustomInput(
-            controller: _vehicleYearCtrl,
-            hint: t(es: "Ano", en: "Year"),
-            prefixIcon: Icons.event_outlined,
+          DropdownButtonFormField<String>(
+            key: ValueKey<String?>("admin-vehicle-year-$_vehicleYear"),
+            initialValue: _vehicleYear,
+            dropdownColor: const Color(0xFF111315),
+            decoration: InputDecoration(
+              labelText: t(es: "Ano", en: "Year"),
+              prefixIcon: const Icon(Icons.event_outlined),
+            ),
+            items: _vehicleYears
+                .map(
+                  (year) => DropdownMenuItem<String>(
+                    value: year,
+                    child: Text(year),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) => setState(() => _vehicleYear = value),
           ),
           const SizedBox(height: 10),
           CustomInput(

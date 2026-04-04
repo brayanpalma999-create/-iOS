@@ -5,6 +5,7 @@ import "package:provider/provider.dart";
 
 import "admin_account_pages.dart";
 import "admin_operations_monitor.dart";
+import "../shared/support_center_page.dart";
 import "../../../providers/admin_provider.dart";
 import "../../../providers/auth_provider.dart";
 import "../../../providers/chat_provider.dart";
@@ -203,6 +204,19 @@ class _AdminSettingsState extends State<AdminSettings> {
               ),
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(builder: (_) => const _AdminHelpPage()),
+              ),
+            ),
+            _AccountTile(
+              icon: Icons.support_agent_rounded,
+              title: t(es: "Soporte e historial", en: "Support and history"),
+              subtitle: t(
+                es: "Tickets, seguimiento y casos operativos",
+                en: "Tickets, tracking, and operational cases",
+              ),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const SupportCenterPage(adminMode: true),
+                ),
               ),
             ),
           ],

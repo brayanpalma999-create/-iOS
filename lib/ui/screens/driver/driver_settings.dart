@@ -13,6 +13,7 @@ import "../../widgets/account_avatar.dart";
 import "../../widgets/custom_button.dart";
 import "../../widgets/custom_input.dart";
 import "../../widgets/help_sheet.dart";
+import "../shared/support_center_page.dart";
 import "driver_account_pages.dart";
 
 class DriverSettings extends StatelessWidget {
@@ -118,6 +119,19 @@ class DriverSettings extends StatelessWidget {
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
                   builder: (_) => const _DriverHelpPage(),
+                ),
+              ),
+            ),
+            _MenuTile(
+              icon: Icons.support_agent_rounded,
+              title: t(es: "Soporte e historial", en: "Support and history"),
+              subtitle: t(
+                es: "Casos, seguimiento y respuesta operativa",
+                en: "Cases, tracking, and operational response",
+              ),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const SupportCenterPage(adminMode: false),
                 ),
               ),
             ),

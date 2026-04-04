@@ -17,12 +17,27 @@ class AppConstants {
   );
   static bool get hasMapboxToken => mapboxToken.trim().isNotEmpty;
   static const liveKitTokenPath = "/livekit/token";
+  static const supportTicketsPath = "/support/tickets";
+  static const telemetryEventsPath = "/telemetry/events";
+  static const operationsSummaryPath = "/operations/summary";
+  static const pushRegisterPath = "/devices/push/register";
+  static const pushUnregisterPath = "/devices/push/unregister";
+  static const sentryDsn = String.fromEnvironment(
+    "SENTRY_DSN",
+    defaultValue: "",
+  );
   static const liveKitRoomName = String.fromEnvironment(
     "LIVEKIT_ROOM_NAME",
     defaultValue: "atob-intercom",
   );
   static const liveKitSignalTopic = "atob.intercom.signal";
   static String get liveKitTokenUrl => "$socketUrl$liveKitTokenPath";
+  static String get supportTicketsUrl => "$socketUrl$supportTicketsPath";
+  static String get telemetryEventsUrl => "$socketUrl$telemetryEventsPath";
+  static String get operationsSummaryUrl => "$socketUrl$operationsSummaryPath";
+  static String get pushRegisterUrl => "$socketUrl$pushRegisterPath";
+  static String get pushUnregisterUrl => "$socketUrl$pushUnregisterPath";
+  static bool get hasSentryDsn => sentryDsn.trim().isNotEmpty;
   static const tileModernUrl =
       "https://api.mapbox.com/styles/v1/mapbox/navigation-day-v1/tiles/256/{z}/{x}/{y}?access_token=$mapboxToken";
   static const tileNightUrl =
