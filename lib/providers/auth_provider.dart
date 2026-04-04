@@ -559,12 +559,12 @@ class AuthProvider extends ChangeNotifier {
     final removedOnServer = await _removeAuthorizedDriverFromServer(id);
     if (removedOnServer) {
       _authorizedDrivers.removeWhere((profile) => profile.id == id);
-      await _persistAuthorizedDrivers();
+      await _persistAuthorizedDrivers(mergeWithServerBackup: false);
       notifyListeners();
       return;
     }
     _authorizedDrivers.removeWhere((profile) => profile.id == id);
-    await _persistAuthorizedDrivers();
+    await _persistAuthorizedDrivers(mergeWithServerBackup: false);
     notifyListeners();
   }
 
@@ -1015,8 +1015,13 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> _persistAuthorizedDrivers() async {
+  Future<void> _persistAuthorizedDrivers({
+    bool mergeWithServerBackup = true,
+  }) async {
     final prefs = await SharedPreferences.getInstance();
+    if (mergeWithServerBackup) {
+      await _mergeAuthorizedDriversFromServerBackup();
+    }
     _syncAuthorizedDriversIntoStoredDriverAccounts();
     _syncAuthorizedDriversToAdminBackup();
     final serialized = jsonEncode(
@@ -1025,7 +1030,9 @@ class AuthProvider extends ChangeNotifier {
     await prefs.setString(_authorizedDriversKey, serialized);
     await prefs.setString(_authorizedDriversBackupKey, serialized);
     await _persistStoredAccounts();
-    await _pushAdminAuthorizedDriversBackupToServer();
+    await _pushAdminAuthorizedDriversBackupToServer(
+      replaceAuthorizedDriversBackup: !mergeWithServerBackup,
+    );
   }
 
   Future<void> _persistStoredAccounts() async {
@@ -1537,7 +1544,35 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> _pushAdminAuthorizedDriversBackupToServer() async {
+  Future<void> _mergeAuthorizedDriversFromServerBackup() async {
+    final merged = <DriverAccessProfile>[
+      ..._authorizedDrivers.map(_secureDriverAccessProfile),
+    ];
+    final remoteDrivers = await _fetchAuthorizedDriversFromServer();
+    if (remoteDrivers != null) {
+      for (final profile in remoteDrivers.map(_secureDriverAccessProfile)) {
+        _mergeAuthorizedDriverIntoList(merged, profile);
+      }
+    }
+    final adminKey = _adminAccountStorageKey();
+    final remoteAdmin = await _fetchStoredAccountFromServer(adminKey);
+    final rawBackup = remoteAdmin?["authorizedDriversBackup"];
+    if (rawBackup is List) {
+      for (final item in rawBackup.whereType<Map>()) {
+        final profile = _secureDriverAccessProfile(
+          DriverAccessProfile.fromJson(item.cast<String, dynamic>()),
+        );
+        _mergeAuthorizedDriverIntoList(merged, profile);
+      }
+    }
+    _authorizedDrivers
+      ..clear()
+      ..addAll(merged);
+  }
+
+  Future<void> _pushAdminAuthorizedDriversBackupToServer({
+    bool replaceAuthorizedDriversBackup = false,
+  }) async {
     final adminKey = _adminAccountStorageKey();
     final stored = _secureStoredAccountRecord(adminKey, _storedAccounts[adminKey]);
     final adminUser = _user?.role == UserRole.admin
@@ -1569,6 +1604,7 @@ class AuthProvider extends ChangeNotifier {
             .map((profile) => _secureDriverAccessProfile(profile).toJson())
             .toList(growable: false),
         "authorizedDriversUpdatedAt": DateTime.now().toIso8601String(),
+        "replaceAuthorizedDriversBackup": replaceAuthorizedDriversBackup,
       },
     );
   }
@@ -1615,6 +1651,44 @@ class AuthProvider extends ChangeNotifier {
       return;
     }
     _authorizedDrivers.insert(0, secureProfile);
+  }
+
+  void _mergeAuthorizedDriverIntoList(
+    List<DriverAccessProfile> target,
+    DriverAccessProfile profile,
+  ) {
+    if (profile.id.isEmpty || profile.email.trim().isEmpty) return;
+    final secureProfile = _secureDriverAccessProfile(profile);
+    final normalizedEmail = DriverAccessProfile.normalizeLookup(
+      secureProfile.email,
+    );
+    final index = target.indexWhere(
+      (item) =>
+          item.id == secureProfile.id ||
+          DriverAccessProfile.normalizeLookup(item.email) == normalizedEmail,
+    );
+    if (index < 0) {
+      target.add(secureProfile);
+      return;
+    }
+    final current = target[index];
+    target[index] = current.copyWith(
+      id: secureProfile.id,
+      displayName: _nonEmpty(secureProfile.displayName) ?? current.displayName,
+      email: _nonEmpty(secureProfile.email) ?? current.email,
+      accessCode: _nonEmpty(secureProfile.accessCode) ?? current.accessCode,
+      accessCodeTail:
+          _nonEmpty(secureProfile.accessCodeTail) ?? current.accessCodeTail,
+      phoneNumber: _nullableTrim(secureProfile.phoneNumber) ?? current.phoneNumber,
+      governmentId:
+          _nullableTrim(secureProfile.governmentId) ?? current.governmentId,
+      isActive: secureProfile.isActive,
+      isActivated: secureProfile.isActivated,
+      activationSentAt:
+          secureProfile.activationSentAt ?? current.activationSentAt,
+      activatedAt: secureProfile.activatedAt ?? current.activatedAt,
+      createdAt: secureProfile.createdAt,
+    );
   }
 
   void _syncAuthorizedDriversIntoStoredDriverAccounts() {
