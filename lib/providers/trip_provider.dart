@@ -1,9 +1,15 @@
+import "dart:async";
+import "dart:convert";
+import "dart:io";
+
 import "package:flutter/material.dart";
+import "package:shared_preferences/shared_preferences.dart";
 
 import "../models/location_model.dart";
 import "../models/trip_model.dart";
 import "../services/socket_service.dart";
 import "../services/trip_service.dart";
+import "../utils/constants.dart";
 
 class TripProvider extends ChangeNotifier {
   TripProvider({
@@ -12,13 +18,21 @@ class TripProvider extends ChangeNotifier {
   }) : _socketService = socketService,
        _tripService = tripService {
     _bindSocketListeners();
+    unawaited(_initialize());
   }
 
   final SocketService _socketService;
   final TripService _tripService;
   bool _listenersBound = false;
+  Future<void>? _initializeFuture;
+  static const String _tripCacheKey = "atob_trip_cache_v1";
 
   List<TripModel> get trips => _tripService.trips;
+
+  Future<void> _initialize() async {
+    await (_initializeFuture ??= _hydrateFromLocalCache());
+    await refreshFromServer();
+  }
 
   TripModel assignTrip({
     required String driverId,
@@ -51,6 +65,7 @@ class TripProvider extends ChangeNotifier {
     payload["targetId"] = driverId;
     payload["driverIntercomId"] = driverIntercomId ?? driverId;
     _socketService.emit("assign:trip", payload);
+    unawaited(_persistLocalTrips());
     notifyListeners();
     return trip;
   }
@@ -64,6 +79,7 @@ class TripProvider extends ChangeNotifier {
       "status": status,
       if (trip != null) "driverId": trip.driverId,
     });
+    unawaited(_persistLocalTrips());
     notifyListeners();
   }
 
@@ -93,6 +109,7 @@ class TripProvider extends ChangeNotifier {
     if (trip != null) {
       _socketService.emit("trip:update", trip.toJson());
     }
+    unawaited(_persistLocalTrips());
     notifyListeners();
   }
 
@@ -155,6 +172,7 @@ class TripProvider extends ChangeNotifier {
 
   void clearAll() {
     _tripService.clear();
+    unawaited(_persistLocalTrips());
     notifyListeners();
   }
 
@@ -192,6 +210,31 @@ class TripProvider extends ChangeNotifier {
 
     final trip = TripModel.fromJson(normalized);
     _tripService.upsertTrip(trip);
+    unawaited(_persistLocalTrips());
+    notifyListeners();
+  }
+
+  Future<void> refreshFromServer({String? driverId}) async {
+    final response = await _sendJsonRequest(
+      method: "GET",
+      path: "/trips/history",
+      queryParameters: {
+        if ((driverId ?? "").trim().isNotEmpty) "driverId": driverId!.trim(),
+        "limit": "200",
+      },
+    );
+    if (response == null || response["ok"] != true) return;
+    final rawTrips = response["trips"];
+    if (rawTrips is! List) return;
+    final loaded = rawTrips
+        .whereType<Map>()
+        .map((item) => TripModel.fromJson(item.cast<String, dynamic>()))
+        .toList(growable: false);
+    if (loaded.isEmpty && _tripService.trips.isNotEmpty) {
+      return;
+    }
+    _tripService.replaceAll(loaded);
+    await _persistLocalTrips();
     notifyListeners();
   }
 
@@ -211,6 +254,7 @@ class TripProvider extends ChangeNotifier {
       final id = _stringValue(map["tripId"] ?? map["id"]);
       if (id == null || id.isEmpty) return;
       _tripService.updateStatus(id, "accepted");
+      unawaited(_persistLocalTrips());
       notifyListeners();
     });
     _socketService.on("trip:picked_up", (payload) {
@@ -219,6 +263,7 @@ class TripProvider extends ChangeNotifier {
       final id = _stringValue(map["tripId"] ?? map["id"]);
       if (id == null || id.isEmpty) return;
       _tripService.updateStatus(id, "picked_up");
+      unawaited(_persistLocalTrips());
       notifyListeners();
     });
     _socketService.on("trip:rejected", (payload) {
@@ -227,6 +272,7 @@ class TripProvider extends ChangeNotifier {
       final id = _stringValue(map["tripId"] ?? map["id"]);
       if (id == null || id.isEmpty) return;
       _tripService.updateStatus(id, "rejected");
+      unawaited(_persistLocalTrips());
       notifyListeners();
     });
     _socketService.on("trip:update", (payload) {
@@ -238,8 +284,65 @@ class TripProvider extends ChangeNotifier {
       final id = _stringValue(map["tripId"] ?? map["id"]);
       if (id == null || id.isEmpty) return;
       _tripService.updateStatus(id, "completed");
+      unawaited(_persistLocalTrips());
       notifyListeners();
     });
+  }
+
+  Future<void> _hydrateFromLocalCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_tripCacheKey);
+    if ((raw ?? "").trim().isEmpty) return;
+    try {
+      final decoded = jsonDecode(raw!);
+      if (decoded is! List) return;
+      final cached = decoded
+          .whereType<Map>()
+          .map((item) => TripModel.fromJson(item.cast<String, dynamic>()))
+          .toList(growable: false);
+      if (cached.isEmpty) return;
+      _tripService.replaceAll(cached);
+      notifyListeners();
+    } catch (_) {
+      // Ignore malformed local cache.
+    }
+  }
+
+  Future<void> _persistLocalTrips() async {
+    final prefs = await SharedPreferences.getInstance();
+    final payload = jsonEncode(
+      _tripService.trips.map((trip) => trip.toJson()).toList(growable: false),
+    );
+    await prefs.setString(_tripCacheKey, payload);
+  }
+
+  Future<Map<String, dynamic>?> _sendJsonRequest({
+    required String method,
+    required String path,
+    Map<String, String>? queryParameters,
+  }) async {
+    final client = HttpClient();
+    try {
+      var uri = Uri.parse("${AppConstants.socketUrl}$path");
+      if (queryParameters != null && queryParameters.isNotEmpty) {
+        uri = uri.replace(queryParameters: queryParameters);
+      }
+      final request = await client.openUrl(method, uri);
+      request.headers.set(HttpHeaders.acceptHeader, "application/json");
+      final response = await request.close();
+      final text = await response.transform(utf8.decoder).join();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        return null;
+      }
+      final decoded = jsonDecode(text);
+      if (decoded is Map<String, dynamic>) return decoded;
+      if (decoded is Map) return decoded.cast<String, dynamic>();
+      return null;
+    } catch (_) {
+      return null;
+    } finally {
+      client.close(force: true);
+    }
   }
 
   Map<String, dynamic>? _asStringMap(dynamic payload) {

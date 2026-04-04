@@ -10,6 +10,7 @@ import "providers/chat_provider.dart";
 import "providers/driver_provider.dart";
 import "providers/intercom_provider.dart";
 import "providers/map_ui_provider.dart";
+import "providers/operations_provider.dart";
 import "providers/trip_provider.dart";
 import "routes.dart";
 import "services/beep_service.dart";
@@ -17,6 +18,7 @@ import "services/livekit_intercom_service.dart";
 import "services/livekit_token_service.dart";
 import "services/location_service.dart";
 import "services/map_service.dart";
+import "services/operations_service.dart";
 import "services/permission_service.dart";
 import "services/socket_service.dart";
 import "services/trip_service.dart";
@@ -71,6 +73,7 @@ class _AtoBAppState extends State<AtoBApp> with WidgetsBindingObserver {
         Provider<SocketService>(create: (_) => SocketService()),
         Provider<LocationService>(create: (_) => LocationService()),
         Provider<MapService>(create: (_) => MapService()),
+        Provider<OperationsService>(create: (_) => OperationsService()),
         Provider<BeepService>(create: (_) => BeepService()),
         Provider<LiveKitTokenService>(
           create: (_) => LiveKitTokenService(),
@@ -84,6 +87,11 @@ class _AtoBAppState extends State<AtoBApp> with WidgetsBindingObserver {
         Provider<TripService>(create: (_) => TripService()),
         ChangeNotifierProvider<MapUiProvider>(create: (_) => MapUiProvider()),
         ChangeNotifierProvider<AuthProvider>(create: (_) => AuthProvider()),
+        ChangeNotifierProvider<OperationsProvider>(
+          create: (context) => OperationsProvider(
+            operationsService: context.read<OperationsService>(),
+          ),
+        ),
         ChangeNotifierProxyProvider2<SocketService, TripService, TripProvider>(
           create: (context) => TripProvider(
             socketService: context.read<SocketService>(),

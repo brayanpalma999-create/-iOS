@@ -4,11 +4,13 @@ import "package:flutter/material.dart";
 import "package:provider/provider.dart";
 
 import "admin_account_pages.dart";
+import "admin_operations_monitor.dart";
 import "../../../providers/admin_provider.dart";
 import "../../../providers/auth_provider.dart";
 import "../../../providers/chat_provider.dart";
 import "../../../providers/driver_provider.dart";
 import "../../../providers/intercom_provider.dart";
+import "../../../providers/operations_provider.dart";
 import "../../../providers/trip_provider.dart";
 import "../../../routes.dart";
 import "../../../utils/app_text.dart";
@@ -47,10 +49,12 @@ class _AdminSettingsState extends State<AdminSettings> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       context.read<AuthProvider>().refreshAuthorizedDrivers();
+      context.read<OperationsProvider>().refresh();
     });
     _refreshTimer = Timer.periodic(const Duration(seconds: 4), (_) {
       if (!mounted) return;
       context.read<AuthProvider>().refreshAuthorizedDrivers();
+      context.read<OperationsProvider>().refresh(silent: true);
     });
   }
 
@@ -72,6 +76,7 @@ class _AdminSettingsState extends State<AdminSettings> {
     final validRecords = auth.authorizedDrivers
         .where((profile) => profile.isActive && profile.isActivated)
         .length;
+    final operations = context.watch<OperationsProvider>().summary;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -131,6 +136,26 @@ class _AdminSettingsState extends State<AdminSettings> {
         _GroupCard(
           title: t(es: "Operacion", en: "Operation"),
           children: [
+            _AccountTile(
+              icon: Icons.monitor_heart_outlined,
+              title: t(es: "Monitor operativo", en: "Operations monitor"),
+              subtitle: operations == null
+                  ? t(
+                      es: "Salud del backend, alertas y auditoria",
+                      en: "Backend health, alerts, and audit",
+                    )
+                  : t(
+                      es:
+                          "${operations.counts.activeTrips} rutas activas • ${operations.counts.pendingActivations} pendientes",
+                      en:
+                          "${operations.counts.activeTrips} active routes • ${operations.counts.pendingActivations} pending",
+                    ),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const AdminOperationsMonitorPage(),
+                ),
+              ),
+            ),
             _AccountTile(
               icon: Icons.groups_2_rounded,
               title: t(es: "Estado de flota", en: "Fleet status"),

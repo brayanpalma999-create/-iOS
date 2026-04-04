@@ -49,6 +49,12 @@ class TripService {
     return trip;
   }
 
+  void replaceAll(List<TripModel> trips) {
+    _trips
+      ..clear()
+      ..addAll(trips);
+  }
+
   TripModel? byId(String id) {
     for (final t in _trips) {
       if (t.id == id) return t;
