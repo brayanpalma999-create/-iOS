@@ -49,6 +49,7 @@ class TripProvider extends ChangeNotifier {
   }) {
     final trip = _tripService.createTrip(
       driverId: driverId,
+      driverIntercomId: driverIntercomId,
       origin: origin,
       destination: destination,
       distanceMiles: distanceMiles,
@@ -78,6 +79,20 @@ class TripProvider extends ChangeNotifier {
       "id": tripId,
       "status": status,
       if (trip != null) "driverId": trip.driverId,
+    });
+    unawaited(_persistLocalTrips());
+    notifyListeners();
+  }
+
+  void cancelTrip(String tripId) {
+    _tripService.updateStatus(tripId, "cancelled");
+    final trip = _tripService.byId(tripId);
+    _socketService.emit("trip:cancelled", {
+      "tripId": tripId,
+      "id": tripId,
+      "status": "cancelled",
+      if (trip != null) "driverId": trip.driverId,
+      if (trip?.driverIntercomId != null) "driverIntercomId": trip!.driverIntercomId,
     });
     unawaited(_persistLocalTrips());
     notifyListeners();
@@ -264,6 +279,15 @@ class TripProvider extends ChangeNotifier {
       unawaited(_persistLocalTrips());
       notifyListeners();
     });
+    _socketService.on("trip:cancelled", (payload) {
+      final map = _asStringMap(payload);
+      if (map == null) return;
+      final id = _stringValue(map["tripId"] ?? map["id"]);
+      if (id == null || id.isEmpty) return;
+      _tripService.updateStatus(id, "cancelled");
+      unawaited(_persistLocalTrips());
+      notifyListeners();
+    });
     _socketService.on("trip:update", (payload) {
       ingestAssignedTrip(payload);
     });
@@ -311,15 +335,21 @@ class TripProvider extends ChangeNotifier {
     Map<String, String>? queryParameters,
   }) async {
     final client = HttpClient();
+    client.connectionTimeout = const Duration(seconds: 12);
     try {
       var uri = Uri.parse("${AppConstants.socketUrl}$path");
       if (queryParameters != null && queryParameters.isNotEmpty) {
         uri = uri.replace(queryParameters: queryParameters);
       }
-      final request = await client.openUrl(method, uri);
+      final request = await client
+          .openUrl(method, uri)
+          .timeout(const Duration(seconds: 15));
       request.headers.set(HttpHeaders.acceptHeader, "application/json");
-      final response = await request.close();
-      final text = await response.transform(utf8.decoder).join();
+      final response = await request.close().timeout(const Duration(seconds: 15));
+      final text = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 15));
       if (response.statusCode < 200 || response.statusCode >= 300) {
         return null;
       }

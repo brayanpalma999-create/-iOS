@@ -17,6 +17,7 @@ class TripCard extends StatelessWidget {
       "picked_up" => const Color(0xFFFFC857),
       "completed" => const Color(0xFF6EA8FF),
       "rejected" => Colors.redAccent,
+      "cancelled" => Colors.redAccent,
       "assigned" => Colors.orangeAccent,
       _ => Colors.white70,
     };

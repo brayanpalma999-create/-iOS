@@ -11,6 +11,7 @@ class TripService {
 
   TripModel createTrip({
     required String driverId,
+    String? driverIntercomId,
     required String origin,
     required String destination,
     double distanceMiles = 0,
@@ -24,6 +25,7 @@ class TripService {
     final trip = TripModel(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
       driverId: driverId,
+      driverIntercomId: driverIntercomId,
       origin: origin,
       destination: destination,
       status: "assigned",
@@ -73,6 +75,7 @@ class TripService {
   void updateTrip(
     String tripId, {
     String? status,
+    Object? driverIntercomId = _tripServiceUnset,
     double? distanceMiles,
     double? durationMinutes,
     double? fareUsd,
@@ -85,6 +88,9 @@ class TripService {
     if (index < 0) return;
     _trips[index] = _trips[index].copyWith(
       status: status,
+      driverIntercomId: identical(driverIntercomId, _tripServiceUnset)
+          ? _trips[index].driverIntercomId
+          : driverIntercomId as String?,
       distanceMiles: distanceMiles,
       durationMinutes: durationMinutes,
       fareUsd: fareUsd,
@@ -97,14 +103,14 @@ class TripService {
 
   TripModel? latestForDriver(String driverId) {
     for (final t in _trips) {
-      if (t.driverId == driverId) return t;
+      if (_matchesDriver(t, driverId)) return t;
     }
     return null;
   }
 
   TripModel? latestActiveForDriver(String driverId) {
     for (final t in _trips) {
-      if (t.driverId != driverId) continue;
+      if (!_matchesDriver(t, driverId)) continue;
       if (t.status == "assigned" ||
           t.status == "accepted" ||
           t.status == "picked_up") {
@@ -116,13 +122,13 @@ class TripService {
 
   int totalTrips({String? driverId}) {
     if (driverId == null) return _trips.length;
-    return _trips.where((t) => t.driverId == driverId).length;
+    return _trips.where((t) => _matchesDriver(t, driverId)).length;
   }
 
   int totalActiveTrips({String? driverId}) {
     final source = driverId == null
         ? _trips
-        : _trips.where((t) => t.driverId == driverId);
+        : _trips.where((t) => _matchesDriver(t, driverId));
     return source
         .where(
           (t) =>
@@ -136,16 +142,16 @@ class TripService {
   double estimatedRevenue({String? driverId}) {
     final source = driverId == null
         ? _trips
-        : _trips.where((t) => t.driverId == driverId);
+        : _trips.where((t) => _matchesDriver(t, driverId));
     return source
-        .where((t) => t.status != "rejected")
+        .where((t) => t.status != "rejected" && t.status != "cancelled")
         .fold<double>(0, (sum, t) => sum + t.fareUsd);
   }
 
   double confirmedRevenue({String? driverId}) {
     final source = driverId == null
         ? _trips
-        : _trips.where((t) => t.driverId == driverId);
+        : _trips.where((t) => _matchesDriver(t, driverId));
     return source
         .where((t) => _isCompletedStatus(t.status))
         .fold<double>(0, (sum, t) => sum + t.fareUsd);
@@ -178,15 +184,17 @@ class TripService {
   int completedTrips({String? driverId}) {
     final source = driverId == null
         ? _trips
-        : _trips.where((t) => t.driverId == driverId);
+        : _trips.where((t) => _matchesDriver(t, driverId));
     return source.where((t) => _isCompletedStatus(t.status)).length;
   }
 
   int rejectedTrips({String? driverId}) {
     final source = driverId == null
         ? _trips
-        : _trips.where((t) => t.driverId == driverId);
-    return source.where((t) => t.status == "rejected").length;
+        : _trips.where((t) => _matchesDriver(t, driverId));
+    return source
+        .where((t) => t.status == "rejected" || t.status == "cancelled")
+        .length;
   }
 
   double acceptanceRate({String? driverId}) {
@@ -200,8 +208,10 @@ class TripService {
   double averageFare({String? driverId}) {
     final source = driverId == null
         ? _trips
-        : _trips.where((t) => t.driverId == driverId);
-    final valid = source.where((t) => t.status != "rejected").toList();
+        : _trips.where((t) => _matchesDriver(t, driverId));
+    final valid = source
+        .where((t) => t.status != "rejected" && t.status != "cancelled")
+        .toList();
     if (valid.isEmpty) return 0;
     final total = valid.fold<double>(0, (sum, t) => sum + t.fareUsd);
     return total / valid.length;
@@ -210,7 +220,7 @@ class TripService {
   double averageDistanceMiles({String? driverId}) {
     final source = driverId == null
         ? _trips
-        : _trips.where((t) => t.driverId == driverId);
+        : _trips.where((t) => _matchesDriver(t, driverId));
     final valid = source.where((t) => t.distanceMiles > 0).toList();
     if (valid.isEmpty) return 0;
     final total = valid.fold<double>(0, (sum, t) => sum + t.distanceMiles);
@@ -227,11 +237,20 @@ class TripService {
   }) {
     final source = driverId == null
         ? _trips
-        : _trips.where((trip) => trip.driverId == driverId);
+        : _trips.where((trip) => _matchesDriver(trip, driverId));
     if (confirmedOnly) {
       return source.where((trip) => _isCompletedStatus(trip.status));
     }
-    return source.where((trip) => trip.status != "rejected");
+    return source.where(
+      (trip) => trip.status != "rejected" && trip.status != "cancelled",
+    );
+  }
+
+  bool _matchesDriver(TripModel trip, String driverId) {
+    final normalized = driverId.trim().toLowerCase();
+    if (normalized.isEmpty) return false;
+    return trip.driverId.trim().toLowerCase() == normalized ||
+        (trip.driverIntercomId ?? "").trim().toLowerCase() == normalized;
   }
 
   bool _isCompletedStatus(String status) {
@@ -240,3 +259,5 @@ class TripService {
         status == "picked_up";
   }
 }
+
+const Object _tripServiceUnset = Object();

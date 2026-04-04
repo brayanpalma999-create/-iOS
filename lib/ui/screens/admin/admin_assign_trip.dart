@@ -6,7 +6,6 @@ import "package:provider/provider.dart";
 
 import "../../../models/driver_model.dart";
 import "../../../models/location_model.dart";
-import "../../../models/trip_model.dart";
 import "../../../providers/driver_provider.dart";
 import "../../../providers/trip_provider.dart";
 import "../../../services/map_service.dart";
@@ -151,7 +150,7 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
     });
     if (origin) {
       _originDebounce?.cancel();
-      if (normalized.length < 3) {
+      if (normalized.length < 2) {
         setState(() {
           _originLoading = false;
           _originSuggestions = <AddressSuggestion>[];
@@ -167,7 +166,7 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
     }
 
     _destDebounce?.cancel();
-    if (normalized.length < 3) {
+    if (normalized.length < 2) {
       setState(() {
         _destLoading = false;
         _destSuggestions = <AddressSuggestion>[];
@@ -194,18 +193,18 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
         context.read<DriverProvider>().drivers,
       );
       final drivers = context.read<DriverProvider>().drivers;
-      LatLng? from = _originPoint;
-      LatLng? to = _destPoint;
-      from ??= await _mapService.geocodeAddress(
-        _originCtrl.text.trim(),
+      final originCandidates = await _candidatePointsFor(
+        query: _originCtrl.text.trim(),
+        selected: _originPoint,
         proximity: proximity,
       );
-      to ??= await _mapService.geocodeAddress(
-        _destCtrl.text.trim(),
+      final destinationCandidates = await _candidatePointsFor(
+        query: _destCtrl.text.trim(),
+        selected: _destPoint,
         proximity: proximity,
       );
 
-      if (from == null || to == null) {
+      if (originCandidates.isEmpty || destinationCandidates.isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -221,10 +220,6 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
         return null;
       }
 
-      final passengerEstimate = await _mapService.calculateRoute(
-        origin: from,
-        destination: to,
-      );
       DriverModel? selectedDriver;
       for (final driver in drivers) {
         if (driver.id == _selectedDriverId) {
@@ -242,12 +237,18 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
           driverPoint != null &&
           (driverPoint.latitude.abs() > 0.001 ||
               driverPoint.longitude.abs() > 0.001);
-      final navigationEstimate = hasDriverPoint
-          ? await _mapService.calculateRouteChain(
-              stops: [driverPoint, from, to],
+      final bestPassenger = await _bestPassengerEstimate(
+        originCandidates: originCandidates,
+        destinationCandidates: destinationCandidates,
+      );
+      final bestNavigation = hasDriverPoint
+          ? await _bestNavigationEstimate(
+              driverPoint: driverPoint,
+              originCandidates: originCandidates,
+              destinationCandidates: destinationCandidates,
             )
-          : passengerEstimate;
-      if (passengerEstimate == null && navigationEstimate == null) {
+          : bestPassenger;
+      if (bestPassenger == null && bestNavigation == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -262,26 +263,34 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
         }
         return null;
       }
+      final chosen = bestNavigation ?? bestPassenger;
+      if (chosen == null || chosen.estimate.path.length < 2) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                context.txt(
+                  es: "No se pudo calcular la ruta exacta por calles. Intenta un local o direccion cercana.",
+                  en: "The exact road route could not be calculated. Try a nearby place or address.",
+                ),
+              ),
+            ),
+          );
+        }
+        return null;
+      }
       final estimate = RouteEstimate(
-        distanceMiles: passengerEstimate?.distanceMiles ?? 0,
-        durationMinutes:
-            navigationEstimate?.durationMinutes ??
-            passengerEstimate?.durationMinutes ??
-            0,
-        fareUsd: passengerEstimate?.fareUsd ?? 0,
-        path:
-            navigationEstimate?.path ??
-            passengerEstimate?.path ??
-            <LatLng>[from, to],
-        steps:
-            navigationEstimate?.steps ??
-            passengerEstimate?.steps ??
-            const <RouteStepModel>[],
+        distanceMiles:
+            bestPassenger?.estimate.distanceMiles ?? chosen.estimate.distanceMiles,
+        durationMinutes: chosen.estimate.durationMinutes,
+        fareUsd: bestPassenger?.estimate.fareUsd ?? chosen.estimate.fareUsd,
+        path: chosen.estimate.path,
+        steps: chosen.estimate.steps,
       );
       if (!mounted) return estimate;
       setState(() {
-        _originPoint = from;
-        _destPoint = to;
+        _originPoint = chosen.origin;
+        _destPoint = chosen.destination;
         _routeEstimate = estimate;
       });
       return estimate;
@@ -314,6 +323,7 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
     final proximity = _resolveProximity(drivers);
     final data = await _mapService.autocompleteAddress(
       query,
+      limit: 8,
       proximity: proximity,
     );
     if (!mounted) return;
@@ -371,6 +381,82 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
     if (_originPoint != null && _destPoint != null) {
       unawaited(_resolveRouteEstimate());
     }
+  }
+
+  Future<List<LatLng>> _candidatePointsFor({
+    required String query,
+    required LatLng? selected,
+    required LatLng? proximity,
+  }) async {
+    if (selected != null) return <LatLng>[selected];
+    final suggestions = await _mapService.geocodeCandidates(
+      query,
+      limit: 8,
+      proximity: proximity,
+    );
+    final points = <LatLng>[];
+    final seen = <String>{};
+    for (final item in suggestions) {
+      final point = item.point;
+      if (point == null) continue;
+      final key =
+          "${point.latitude.toStringAsFixed(6)},${point.longitude.toStringAsFixed(6)}";
+      if (!seen.add(key)) continue;
+      points.add(point);
+    }
+    return points;
+  }
+
+  Future<_RouteCandidate?> _bestPassengerEstimate({
+    required List<LatLng> originCandidates,
+    required List<LatLng> destinationCandidates,
+  }) async {
+    _RouteCandidate? best;
+    for (final from in originCandidates.take(4)) {
+      for (final to in destinationCandidates.take(4)) {
+        final estimate = await _mapService.calculateRoute(
+          origin: from,
+          destination: to,
+        );
+        if (estimate == null || estimate.path.length < 2) continue;
+        final candidate = _RouteCandidate(
+          origin: from,
+          destination: to,
+          estimate: estimate,
+        );
+        if (best == null ||
+            candidate.estimate.durationMinutes < best.estimate.durationMinutes) {
+          best = candidate;
+        }
+      }
+    }
+    return best;
+  }
+
+  Future<_RouteCandidate?> _bestNavigationEstimate({
+    required LatLng driverPoint,
+    required List<LatLng> originCandidates,
+    required List<LatLng> destinationCandidates,
+  }) async {
+    _RouteCandidate? best;
+    for (final from in originCandidates.take(4)) {
+      for (final to in destinationCandidates.take(4)) {
+        final estimate = await _mapService.calculateRouteChain(
+          stops: <LatLng>[driverPoint, from, to],
+        );
+        if (estimate == null || estimate.path.length < 2) continue;
+        final candidate = _RouteCandidate(
+          origin: from,
+          destination: to,
+          estimate: estimate,
+        );
+        if (best == null ||
+            candidate.estimate.durationMinutes < best.estimate.durationMinutes) {
+          best = candidate;
+        }
+      }
+    }
+    return best;
   }
 
   bool _isDriverBusy(DriverModel driver, TripProvider tripProvider) {
@@ -666,7 +752,31 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
         ...trips.map(
           (trip) => Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: TripCard(trip: trip),
+            child: Column(
+              children: [
+                TripCard(trip: trip),
+                if (trip.status == "assigned" ||
+                    trip.status == "accepted" ||
+                    trip.status == "picked_up") ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: () {
+                        context.read<TripProvider>().cancelTrip(trip.id);
+                      },
+                      icon: const Icon(Icons.cancel_outlined, size: 18),
+                      label: Text(
+                        t(
+                          es: "Cancelar asignacion",
+                          en: "Cancel assignment",
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
         ),
       ],
@@ -828,4 +938,16 @@ class _AddressSuggestions extends StatelessWidget {
       ),
     );
   }
+}
+
+class _RouteCandidate {
+  const _RouteCandidate({
+    required this.origin,
+    required this.destination,
+    required this.estimate,
+  });
+
+  final LatLng origin;
+  final LatLng destination;
+  final RouteEstimate estimate;
 }

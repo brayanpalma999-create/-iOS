@@ -68,6 +68,7 @@ class TripModel {
   const TripModel({
     required this.id,
     required this.driverId,
+    this.driverIntercomId,
     required this.origin,
     required this.destination,
     required this.status,
@@ -83,6 +84,7 @@ class TripModel {
 
   final String id;
   final String driverId;
+  final String? driverIntercomId;
   final String origin;
   final String destination;
   final String status;
@@ -98,6 +100,7 @@ class TripModel {
   TripModel copyWith({
     String? id,
     String? driverId,
+    Object? driverIntercomId = _tripModelUnset,
     String? origin,
     String? destination,
     String? status,
@@ -113,6 +116,9 @@ class TripModel {
     return TripModel(
       id: id ?? this.id,
       driverId: driverId ?? this.driverId,
+      driverIntercomId: identical(driverIntercomId, _tripModelUnset)
+          ? this.driverIntercomId
+          : driverIntercomId as String?,
       origin: origin ?? this.origin,
       destination: destination ?? this.destination,
       status: status ?? this.status,
@@ -130,6 +136,7 @@ class TripModel {
   Map<String, dynamic> toJson() => {
     "id": id,
     "driverId": driverId,
+    "driverIntercomId": driverIntercomId,
     "origin": origin,
     "destination": destination,
     "status": status,
@@ -147,6 +154,7 @@ class TripModel {
     return TripModel(
       id: json["id"].toString(),
       driverId: json["driverId"].toString(),
+      driverIntercomId: json["driverIntercomId"]?.toString(),
       origin: json["origin"].toString(),
       destination: json["destination"].toString(),
       status: json["status"]?.toString() ?? "assigned",
@@ -181,3 +189,5 @@ class TripModel {
     );
   }
 }
+
+const Object _tripModelUnset = Object();

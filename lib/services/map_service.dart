@@ -87,21 +87,24 @@ class MapService {
     LatLng? proximity,
   }) async {
     final value = query.trim();
+    final effectiveLimit = limit < 8 ? 8 : limit;
     final recent = await _loadRecentSuggestions(
       value,
-      limit: limit,
+      limit: effectiveLimit,
       proximity: proximity,
     );
-    if (value.length < 3) {
-      return recent;
+    if (value.length < 2) {
+      return recent.take(limit).toList();
     }
     if (!AppConstants.hasMapboxToken) {
       final fallback = await _autocompleteWithNominatim(
         value,
-        limit: limit,
+        limit: effectiveLimit,
         proximity: proximity,
       );
-      return _mergeSuggestions(recent, fallback, limit: limit);
+      return _mergeSuggestions(recent, fallback, limit: effectiveLimit)
+          .take(limit)
+          .toList();
     }
 
     final encoded = Uri.encodeComponent(value);
@@ -111,9 +114,11 @@ class MapService {
     final url = Uri.parse(
       "https://api.mapbox.com/geocoding/v5/mapbox.places/$encoded.json"
       "?autocomplete=true"
-      "&types=address,place,locality,neighborhood,poi"
-      "&language=es"
-      "&limit=$limit"
+      "&fuzzyMatch=true"
+      "&routing=true"
+      "&types=poi,address,place,locality,neighborhood,postcode,district"
+      "&language=es,en"
+      "&limit=$effectiveLimit"
       "$proximityQuery"
       "&access_token=${AppConstants.mapboxToken}",
     );
@@ -125,7 +130,14 @@ class MapService {
       request.headers.set(HttpHeaders.userAgentHeader, "AtoB/1.0");
       final response = await request.close().timeout(_networkTimeout);
       if (response.statusCode != 200) {
-        return <AddressSuggestion>[];
+        final fallback = await _autocompleteWithNominatim(
+          value,
+          limit: effectiveLimit,
+          proximity: proximity,
+        );
+        return _mergeSuggestions(recent, fallback, limit: effectiveLimit)
+            .take(limit)
+            .toList();
       }
 
       final body = await response
@@ -134,12 +146,26 @@ class MapService {
           .timeout(_networkTimeout);
       final json = jsonDecode(body);
       if (json is! Map<String, dynamic>) {
-        return <AddressSuggestion>[];
+        final fallback = await _autocompleteWithNominatim(
+          value,
+          limit: effectiveLimit,
+          proximity: proximity,
+        );
+        return _mergeSuggestions(recent, fallback, limit: effectiveLimit)
+            .take(limit)
+            .toList();
       }
 
       final features = json["features"];
       if (features is! List) {
-        return <AddressSuggestion>[];
+        final fallback = await _autocompleteWithNominatim(
+          value,
+          limit: effectiveLimit,
+          proximity: proximity,
+        );
+        return _mergeSuggestions(recent, fallback, limit: effectiveLimit)
+            .take(limit)
+            .toList();
       }
 
       final suggestions = features
@@ -179,13 +205,28 @@ class MapService {
           })
           .where((s) => s.fullAddress.trim().isNotEmpty)
           .toList();
+      final filtered = _filterByProximity(suggestions, proximity);
+      final fallback = filtered.length >= effectiveLimit
+          ? const <AddressSuggestion>[]
+          : await _autocompleteWithNominatim(
+              value,
+              limit: effectiveLimit,
+              proximity: proximity,
+            );
       return _mergeSuggestions(
         recent,
-        _filterByProximity(suggestions, proximity),
-        limit: limit,
-      );
+        _mergeSuggestions(filtered, fallback, limit: effectiveLimit),
+        limit: effectiveLimit,
+      ).take(limit).toList();
     } catch (_) {
-      return recent;
+      final fallback = await _autocompleteWithNominatim(
+        value,
+        limit: effectiveLimit,
+        proximity: proximity,
+      );
+      return _mergeSuggestions(recent, fallback, limit: effectiveLimit)
+          .take(limit)
+          .toList();
     } finally {
       client.close(force: true);
     }
@@ -296,13 +337,28 @@ class MapService {
   }
 
   Future<LatLng?> geocodeAddress(String query, {LatLng? proximity}) async {
-    final results = await autocompleteAddress(
+    final results = await geocodeCandidates(
       query,
-      limit: 1,
+      limit: 4,
       proximity: proximity,
     );
     if (results.isEmpty) return null;
     return results.first.point;
+  }
+
+  Future<List<AddressSuggestion>> geocodeCandidates(
+    String query, {
+    int limit = 6,
+    LatLng? proximity,
+  }) async {
+    final primary = await autocompleteAddress(
+      query,
+      limit: limit,
+      proximity: proximity,
+    );
+    if (primary.isNotEmpty) return primary;
+    if (proximity == null) return primary;
+    return autocompleteAddress(query, limit: limit, proximity: null);
   }
 
   Future<RouteEstimate?> calculateRoute({
@@ -312,10 +368,30 @@ class MapService {
     if (!AppConstants.hasMapboxToken) {
       return _calculateRouteWithOsrm(origin: origin, destination: destination);
     }
+    final traffic = await _calculateRouteWithMapboxProfile(
+      profile: "driving-traffic",
+      origin: origin,
+      destination: destination,
+    );
+    if (traffic != null) return traffic;
+    final driving = await _calculateRouteWithMapboxProfile(
+      profile: "driving",
+      origin: origin,
+      destination: destination,
+    );
+    if (driving != null) return driving;
+    return _calculateRouteWithOsrm(origin: origin, destination: destination);
+  }
+
+  Future<RouteEstimate?> _calculateRouteWithMapboxProfile({
+    required String profile,
+    required LatLng origin,
+    required LatLng destination,
+  }) async {
     final coords =
         "${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}";
     final url = Uri.parse(
-      "https://api.mapbox.com/directions/v5/mapbox/driving/$coords"
+      "https://api.mapbox.com/directions/v5/mapbox/$profile/$coords"
       "?alternatives=false"
       "&continue_straight=true"
       "&geometries=geojson"
@@ -331,7 +407,7 @@ class MapService {
       request.headers.set(HttpHeaders.userAgentHeader, "AtoB/1.0");
       final response = await request.close().timeout(_networkTimeout);
       if (response.statusCode != 200) {
-        return _calculateRouteWithOsrm(origin: origin, destination: destination);
+        return null;
       }
 
       final body = await response
@@ -340,15 +416,15 @@ class MapService {
           .timeout(_networkTimeout);
       final json = jsonDecode(body);
       if (json is! Map<String, dynamic>) {
-        return _calculateRouteWithOsrm(origin: origin, destination: destination);
+        return null;
       }
       final routes = json["routes"];
       if (routes is! List || routes.isEmpty) {
-        return _calculateRouteWithOsrm(origin: origin, destination: destination);
+        return null;
       }
       final first = routes.first;
       if (first is! Map) {
-        return _calculateRouteWithOsrm(origin: origin, destination: destination);
+        return null;
       }
       final map = first.cast<String, dynamic>();
       final meters = (map["distance"] as num?)?.toDouble() ?? 0;
@@ -373,12 +449,10 @@ class MapService {
         }
       }
 
-      if (path.length < 2) {
-        return _calculateRouteWithOsrm(origin: origin, destination: destination);
-      }
+      if (path.length < 2) return null;
       final compactPath = _compactPolyline(path);
       if (!_isUsableRoutePath(compactPath, origin: origin, destination: destination)) {
-        return _calculateRouteWithOsrm(origin: origin, destination: destination);
+        return null;
       }
       final steps = _extractRouteSteps(map);
 
@@ -390,7 +464,7 @@ class MapService {
         steps: steps,
       );
     } catch (_) {
-      return _calculateRouteWithOsrm(origin: origin, destination: destination);
+      return null;
     } finally {
       client.close(force: true);
     }
@@ -569,7 +643,7 @@ class MapService {
     }).toList();
 
     if (near.isNotEmpty) return near;
-    return <AddressSuggestion>[];
+    return suggestions.take(8).toList();
   }
 
   Future<List<AddressSuggestion>> _loadRecentSuggestions(

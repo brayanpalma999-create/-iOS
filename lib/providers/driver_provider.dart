@@ -115,6 +115,7 @@ class DriverProvider extends ChangeNotifier {
     _registerSession(role: "driver", name: _self!.name);
     _socketService.emit("drivers:request", {});
     _startLocationTracking();
+    unawaited(_restoreCurrentTripFromServer());
     notifyListeners();
   }
 
@@ -194,6 +195,7 @@ class DriverProvider extends ChangeNotifier {
         _registerSession(role: _sessionRole!, name: _sessionName!);
       }
       _socketService.emit("drivers:request", {});
+      unawaited(_restoreCurrentTripFromServer());
     });
   }
 
@@ -410,7 +412,9 @@ class DriverProvider extends ChangeNotifier {
     final tripId = _stringValue(map["id"] ?? map["tripId"]);
     final tripStatus = _stringValue(map["status"])?.toLowerCase();
     final nextTripId =
-        (tripStatus == "rejected" || tripStatus == "completed")
+        (tripStatus == "rejected" ||
+                tripStatus == "completed" ||
+                tripStatus == "cancelled")
         ? null
         : tripId;
 
@@ -445,6 +449,33 @@ class DriverProvider extends ChangeNotifier {
       });
     }
     await _refreshNavigationRouteForTrip(tripId);
+    notifyListeners();
+  }
+
+  Future<void> _restoreCurrentTripFromServer() async {
+    final self = _self;
+    if (self == null) return;
+    final stableDriverId = (self.intercomId ?? self.id).trim();
+    if (stableDriverId.isEmpty) return;
+    await _tripProvider.refreshFromServer(driverId: stableDriverId);
+    final activeTrip = _tripProvider.latestActiveForDriver(stableDriverId);
+    if (activeTrip == null) {
+      if (self.currentTripId == null) return;
+      _self = self.copyWith(currentTripId: null);
+      _upsertDriver(_self!);
+      notifyListeners();
+      return;
+    }
+    _self = self.copyWith(currentTripId: activeTrip.id);
+    _upsertDriver(_self!);
+    _socketService.emit("driver:location:update", {
+      "driverId": _self!.id,
+      "intercomId": _self!.intercomId,
+      "name": _self!.name,
+      "status": _self!.status,
+      "currentTripId": activeTrip.id,
+      ..._self!.location.toJson(),
+    });
     notifyListeners();
   }
 
