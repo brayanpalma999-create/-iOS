@@ -391,7 +391,7 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
     if (selected != null) return <LatLng>[selected];
     final suggestions = await _mapService.geocodeCandidates(
       query,
-      limit: 8,
+      limit: 10,
       proximity: proximity,
     );
     final points = <LatLng>[];
@@ -412,8 +412,8 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
     required List<LatLng> destinationCandidates,
   }) async {
     _RouteCandidate? best;
-    for (final from in originCandidates.take(4)) {
-      for (final to in destinationCandidates.take(4)) {
+    for (final from in originCandidates.take(6)) {
+      for (final to in destinationCandidates.take(6)) {
         final estimate = await _mapService.calculateRoute(
           origin: from,
           destination: to,
@@ -439,8 +439,8 @@ class _AdminAssignTripState extends State<AdminAssignTrip> {
     required List<LatLng> destinationCandidates,
   }) async {
     _RouteCandidate? best;
-    for (final from in originCandidates.take(4)) {
-      for (final to in destinationCandidates.take(4)) {
+    for (final from in originCandidates.take(6)) {
+      for (final to in destinationCandidates.take(6)) {
         final estimate = await _mapService.calculateRouteChain(
           stops: <LatLng>[driverPoint, from, to],
         );

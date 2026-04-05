@@ -669,7 +669,7 @@ class DriverProvider extends ChangeNotifier {
 
     final now = DateTime.now();
     final last = _lastNavigationRefreshAt;
-    if (last != null && now.difference(last) < const Duration(seconds: 8)) {
+    if (last != null && now.difference(last) < const Duration(seconds: 5)) {
       return;
     }
 
@@ -695,7 +695,7 @@ class DriverProvider extends ChangeNotifier {
         closestMeters = meters;
       }
     }
-    return startMeters > 32 || closestMeters > 55;
+    return startMeters > 22 || closestMeters > 38;
   }
 
   Future<void> _refreshNavigationRouteForTrip(

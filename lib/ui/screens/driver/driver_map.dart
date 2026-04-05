@@ -36,10 +36,10 @@ class _DriverMapState extends State<DriverMap> {
   bool _seededViewerLocation = false;
   LatLng? _viewerLocation;
   String? _lastRouteFocusKey;
-  bool _hasActiveNavigation = false;
   StreamSubscription<CompassEvent>? _compassSubscription;
   double? _deviceHeading;
   double? _lastAppliedRotation;
+  Timer? _tileRecoveryTimer;
 
   @override
   void initState() {
@@ -49,6 +49,13 @@ class _DriverMapState extends State<DriverMap> {
       if (heading == null || !mounted) return;
       setState(() => _deviceHeading = heading);
     });
+  }
+
+  @override
+  void dispose() {
+    _tileRecoveryTimer?.cancel();
+    _compassSubscription?.cancel();
+    super.dispose();
   }
 
   @override
@@ -117,7 +124,7 @@ class _DriverMapState extends State<DriverMap> {
   }
 
   void _onTileError(Object error) {
-    if (!AppConstants.hasMapboxToken || _forceStableTiles || _hasActiveNavigation) {
+    if (!AppConstants.hasMapboxToken) {
       return;
     }
     final now = DateTime.now();
@@ -129,13 +136,20 @@ class _DriverMapState extends State<DriverMap> {
     }
     _lastTileErrorAt = now;
     if (_tileErrorBurst >= 4 && mounted) {
+      _tileRecoveryTimer?.cancel();
       setState(() => _forceStableTiles = true);
+      _tileRecoveryTimer = Timer(const Duration(seconds: 10), () {
+        if (!mounted) return;
+        setState(() {
+          _forceStableTiles = false;
+          _tileErrorBurst = 0;
+        });
+      });
     }
   }
 
   List<Widget> _baseLayers(MapThemeMode mode) {
-    final mapboxEnabled =
-        AppConstants.hasMapboxToken && (!_forceStableTiles || _hasActiveNavigation);
+    final mapboxEnabled = AppConstants.hasMapboxToken;
     final mapboxUrl = mapboxEnabled
         ? switch (mode) {
             MapThemeMode.flow => AppConstants.tileModernUrl,
@@ -147,13 +161,12 @@ class _DriverMapState extends State<DriverMap> {
       return <Widget>[
         TileLayer(
           urlTemplate: mapboxUrl,
-          fallbackUrl: AppConstants.tileFallbackUrl,
           retinaMode: false,
           errorTileCallback: (_, error, stackTrace) => _onTileError(error),
           evictErrorTileStrategy: EvictErrorTileStrategy.notVisibleRespectMargin,
           userAgentPackageName: "com.example.atob_app",
-          keepBuffer: 2,
-          panBuffer: 1,
+          keepBuffer: _forceStableTiles ? 1 : 3,
+          panBuffer: _forceStableTiles ? 0 : 2,
           maxNativeZoom: 19,
         ),
       ];
@@ -472,12 +485,6 @@ class _DriverMapState extends State<DriverMap> {
   }
 
   @override
-  void dispose() {
-    _compassSubscription?.cancel();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     String t({required String es, required String en}) =>
         context.txt(es: es, en: en);
@@ -508,7 +515,6 @@ class _DriverMapState extends State<DriverMap> {
     final hasStartedTrip =
         activeTrip != null &&
         (activeTrip.status == "accepted" || activeTrip.status == "picked_up");
-    _hasActiveNavigation = hasStartedTrip;
     final fullRoutePath = !hasStartedTrip
         ? <LatLng>[]
         : activeTrip.routePoints
@@ -748,8 +754,8 @@ class _DriverMapState extends State<DriverMap> {
                 left: 10,
                 child: _StatusChip(
                   status: t(
-                    es: "Modo mapa estable activo",
-                    en: "Stable map mode active",
+                    es: "Reconectando mapa...",
+                    en: "Reconnecting map...",
                   ),
                 ),
               ),

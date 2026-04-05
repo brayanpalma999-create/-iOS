@@ -16,6 +16,8 @@ class AddressSuggestion {
     required this.fullAddress,
     this.latitude,
     this.longitude,
+    this.routableLatitude,
+    this.routableLongitude,
     this.isRecent = false,
   });
 
@@ -24,9 +26,14 @@ class AddressSuggestion {
   final String fullAddress;
   final double? latitude;
   final double? longitude;
+  final double? routableLatitude;
+  final double? routableLongitude;
   final bool isRecent;
 
   LatLng? get point {
+    if (routableLatitude != null && routableLongitude != null) {
+      return LatLng(routableLatitude!, routableLongitude!);
+    }
     if (latitude == null || longitude == null) return null;
     return LatLng(latitude!, longitude!);
   }
@@ -50,7 +57,7 @@ class RouteEstimate {
 
 class MapService {
   static const String _recentPlacesKey = "atob_recent_places_v1";
-  static const Duration _networkTimeout = Duration(seconds: 8);
+  static const Duration _networkTimeout = Duration(seconds: 12);
 
   LatLng centerFromDrivers(List<DriverModel> drivers, {LatLng? fallback}) {
     final validDrivers = drivers
@@ -87,7 +94,7 @@ class MapService {
     LatLng? proximity,
   }) async {
     final value = query.trim();
-    final effectiveLimit = limit < 8 ? 8 : limit;
+    final effectiveLimit = limit < 10 ? 10 : limit;
     final recent = await _loadRecentSuggestions(
       value,
       limit: effectiveLimit,
@@ -195,12 +202,15 @@ class MapService {
                 latitude = latRaw.toDouble();
               }
             }
+            final routablePoint = _extractRoutablePoint(feature);
             return AddressSuggestion(
               mainText: text,
               secondaryText: secondary,
               fullAddress: placeName.isEmpty ? text : placeName,
               latitude: latitude,
               longitude: longitude,
+              routableLatitude: routablePoint?.latitude,
+              routableLongitude: routablePoint?.longitude,
             );
           })
           .where((s) => s.fullAddress.trim().isNotEmpty)
@@ -286,6 +296,8 @@ class MapService {
             fullAddress: display,
             latitude: lat,
             longitude: lon,
+            routableLatitude: lat,
+            routableLongitude: lon,
           ),
         );
       }
@@ -330,6 +342,8 @@ class MapService {
       "fullAddress": suggestion.fullAddress,
       "latitude": suggestion.latitude,
       "longitude": suggestion.longitude,
+      "routableLatitude": suggestion.routableLatitude,
+      "routableLongitude": suggestion.routableLongitude,
       "savedAt": DateTime.now().toIso8601String(),
     });
     final trimmed = items.take(12).map(jsonEncode).toList();
@@ -356,9 +370,9 @@ class MapService {
       limit: limit,
       proximity: proximity,
     );
-    if (primary.isNotEmpty) return primary;
     if (proximity == null) return primary;
-    return autocompleteAddress(query, limit: limit, proximity: null);
+    final broad = await autocompleteAddress(query, limit: limit, proximity: null);
+    return _mergeSuggestions(primary, broad, limit: limit);
   }
 
   Future<RouteEstimate?> calculateRoute({
@@ -642,8 +656,8 @@ class MapService {
       return meters <= radiusMeters;
     }).toList();
 
-    if (near.isNotEmpty) return near;
-    return suggestions.take(8).toList();
+    if (near.isEmpty) return suggestions.take(10).toList();
+    return _mergeSuggestions(near, suggestions, limit: 10);
   }
 
   Future<List<AddressSuggestion>> _loadRecentSuggestions(
@@ -678,6 +692,8 @@ class MapService {
             fullAddress: fullAddress,
             latitude: _toDouble(map["latitude"]),
             longitude: _toDouble(map["longitude"]),
+            routableLatitude: _toDouble(map["routableLatitude"]),
+            routableLongitude: _toDouble(map["routableLongitude"]),
             isRecent: true,
           ),
         );
@@ -725,7 +741,7 @@ class MapService {
     required LatLng origin,
     required LatLng destination,
   }) {
-    if (path.length < 3) return false;
+    if (path.length < 2) return false;
     final distance = const Distance();
     final originOffset = distance.as(LengthUnit.Meter, path.first, origin);
     final destinationOffset = distance.as(
@@ -733,15 +749,69 @@ class MapService {
       path.last,
       destination,
     );
-    if (originOffset > 120 || destinationOffset > 120) {
+    if (originOffset > 280 || destinationOffset > 280) {
       return false;
     }
 
     final straightMeters = distance.as(LengthUnit.Meter, origin, destination);
     final traveledMeters = _polylineMeters(path);
     if (traveledMeters <= 0) return false;
-    if (traveledMeters + 8 < straightMeters) return false;
+    if (traveledMeters + 25 < straightMeters) return false;
     return true;
+  }
+
+  LatLng? _extractRoutablePoint(Map<String, dynamic> feature) {
+    final candidates = <dynamic>[
+      feature["routable_points"],
+      feature["properties"],
+      feature["coordinates"],
+    ];
+    for (final candidate in candidates) {
+      final point = _routablePointFrom(candidate);
+      if (point != null) return point;
+    }
+    return null;
+  }
+
+  LatLng? _routablePointFrom(dynamic value) {
+    if (value is! Map) return null;
+    final map = value.cast<String, dynamic>();
+    final directList = map["routable_points"];
+    if (directList is List) {
+      for (final item in directList) {
+        final point = _latLngFromDynamic(item);
+        if (point != null) return point;
+      }
+    }
+    final coordinates = map["coordinates"];
+    if (coordinates is Map) {
+      final nested = _routablePointFrom(coordinates);
+      if (nested != null) return nested;
+    }
+    return _latLngFromDynamic(map);
+  }
+
+  LatLng? _latLngFromDynamic(dynamic raw) {
+    if (raw is List && raw.length >= 2) {
+      final lon = raw[0];
+      final lat = raw[1];
+      if (lon is num && lat is num) {
+        return LatLng(lat.toDouble(), lon.toDouble());
+      }
+    }
+    if (raw is! Map) return null;
+    final map = raw.cast<String, dynamic>();
+    final latitude =
+        _toDouble(map["latitude"]) ??
+        _toDouble(map["lat"]) ??
+        _toDouble(map["y"]);
+    final longitude =
+        _toDouble(map["longitude"]) ??
+        _toDouble(map["lon"]) ??
+        _toDouble(map["lng"]) ??
+        _toDouble(map["x"]);
+    if (latitude == null || longitude == null) return null;
+    return LatLng(latitude, longitude);
   }
 
   double _polylineMeters(List<LatLng> points) {
