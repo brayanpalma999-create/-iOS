@@ -26,7 +26,7 @@ class AdminAssignTrip extends StatefulWidget {
 class _AdminAssignTripState extends State<AdminAssignTrip> {
   final _originCtrl = TextEditingController();
   final _destCtrl = TextEditingController();
-  final MapService _mapService = MapService();
+  MapService get _mapService => context.read<MapService>();
   String? _selectedDriverId;
   LatLng? _originPoint;
   LatLng? _destPoint;

@@ -175,7 +175,7 @@ class _AdminMapState extends State<AdminMap> {
     final allDrivers = context.watch<DriverProvider>().drivers;
     final renderableDrivers = allDrivers.where(_hasRenderableLocation).toList();
     final trips = context.watch<TripProvider>().trips;
-    final mapService = MapService();
+    final mapService = context.read<MapService>();
     final center = renderableDrivers.isNotEmpty
         ? mapService.centerFromDrivers(
             renderableDrivers,

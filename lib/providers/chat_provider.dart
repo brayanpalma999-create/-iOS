@@ -105,6 +105,9 @@ class ChatProvider extends ChangeNotifier {
     _emitGroupMessage(text: normalized, imageBase64: null, imageMimeType: null);
   }
 
+  // ~500 KB limit: base64 of 500KB binary ≈ 680,000 characters.
+  static const int _maxImageBase64Length = 680000;
+
   Future<void> sendPhoto({required String driverId}) async {
     try {
       final picked = await _picker.pickImage(
@@ -115,6 +118,11 @@ class ChatProvider extends ChangeNotifier {
       if (picked == null) return;
       final bytes = await picked.readAsBytes();
       final encoded = base64Encode(bytes);
+      if (encoded.length > _maxImageBase64Length) {
+        _lastError = "La imagen es demasiado grande (máx. 500 KB)";
+        notifyListeners();
+        return;
+      }
       _emitMessage(
         driverId: driverId,
         text: "",
@@ -137,6 +145,11 @@ class ChatProvider extends ChangeNotifier {
       if (picked == null) return;
       final bytes = await picked.readAsBytes();
       final encoded = base64Encode(bytes);
+      if (encoded.length > _maxImageBase64Length) {
+        _lastError = "La imagen es demasiado grande (máx. 500 KB)";
+        notifyListeners();
+        return;
+      }
       _emitGroupMessage(
         text: "",
         imageBase64: encoded,

@@ -54,9 +54,18 @@ class AppConstants {
     "APP_PACKAGE_ID",
     defaultValue: "com.example.atob_app",
   );
-  static const farePerMile = 2.25;
-  static const minimumTripFare = 8.0;
-  static const minimumFareMiles = 3.0;
+  static const farePerMile = double.fromEnvironment(
+    "FARE_PER_MILE",
+    defaultValue: 2.25,
+  );
+  static const minimumTripFare = double.fromEnvironment(
+    "MINIMUM_TRIP_FARE",
+    defaultValue: 8.0,
+  );
+  static const minimumFareMiles = double.fromEnvironment(
+    "MINIMUM_FARE_MILES",
+    defaultValue: 3.0,
+  );
 
   static const background = Color(0xFF050505);
   static const panel = Color(0xFF141414);

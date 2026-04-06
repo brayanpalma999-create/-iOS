@@ -475,7 +475,7 @@ class _AdminTripsPage extends StatelessWidget {
                 item: _InboxItem(
                   title: "${trip.origin} -> ${trip.destination}",
                   body:
-                      "${statusLabel(trip.status)} - ${usd(trip.fareUsd)} - ${milesText(trip.distanceMiles)}",
+                      "${context.statusLabel(trip.status)} - ${usd(trip.fareUsd)} - ${milesText(trip.distanceMiles)}",
                 ),
               ),
             ),

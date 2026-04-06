@@ -311,7 +311,7 @@ class _DriverTripsPage extends StatelessWidget {
               child: _NoticeCard(
                 title: "${trip.origin} -> ${trip.destination}",
                 body:
-                    "${statusLabel(trip.status)} - ${milesText(trip.distanceMiles)} - ${usd(trip.fareUsd)}",
+                    "${context.statusLabel(trip.status)} - ${milesText(trip.distanceMiles)} - ${usd(trip.fareUsd)}",
               ),
             ),
           ),

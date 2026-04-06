@@ -5,24 +5,6 @@ String shortClock(DateTime dateTime) {
   return "$hh:$mm:$ss";
 }
 
-String statusLabel(String raw) {
-  switch (raw) {
-    case "on_way":
-      return "En ruta";
-    case "assigned":
-      return "Asignado";
-    case "accepted":
-      return "En ruta";
-    case "picked_up":
-      return "Cliente a bordo";
-    case "completed":
-      return "Completado";
-    case "rejected":
-      return "Rechazado";
-    default:
-      return raw;
-  }
-}
 
 String usd(double value) => "\$${value.toStringAsFixed(2)}";
 

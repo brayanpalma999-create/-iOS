@@ -5,11 +5,11 @@ import "../providers/auth_provider.dart";
 
 extension AtoBAppText on BuildContext {
   String txt({required String es, required String en}) {
-    final languageCode = read<AuthProvider>().languageCode;
+    final languageCode = watch<AuthProvider>().languageCode;
     return languageCode == "en" ? en : es;
   }
 
-  bool get isEnglish => read<AuthProvider>().languageCode == "en";
+  bool get isEnglish => watch<AuthProvider>().languageCode == "en";
 
   String tripStatus(String raw) {
     switch (raw) {
@@ -25,8 +25,13 @@ extension AtoBAppText on BuildContext {
         return txt(es: "Completado", en: "Completed");
       case "rejected":
         return txt(es: "Rechazado", en: "Rejected");
+      case "cancelled":
+        return txt(es: "Cancelado", en: "Cancelled");
       default:
         return raw;
     }
   }
+
+  /// Bilingual alias — replaces the Spanish-only statusLabel from helpers.dart.
+  String statusLabel(String raw) => tripStatus(raw);
 }

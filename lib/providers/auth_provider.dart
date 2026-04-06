@@ -191,6 +191,7 @@ class AuthProvider extends ChangeNotifier {
   String? _currentAccountKey;
   String? _currentDriverAccessId;
   String? _currentPasswordIdentity;
+  DateTime? _lastServerRefreshAt;
 
   UserModel? get user => _user;
   bool get isAdmin => _user?.role == UserRole.admin;
@@ -255,7 +256,12 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> ensureLoaded() async {
     await (_loadFuture ??= _hydrateLocalState());
-    await _refreshAuthorizedDriversFromServer();
+    final now = DateTime.now();
+    final last = _lastServerRefreshAt;
+    if (last == null || now.difference(last) > const Duration(seconds: 30)) {
+      _lastServerRefreshAt = now;
+      await _refreshAuthorizedDriversFromServer();
+    }
   }
 
   Future<void> warmAccountProfile({

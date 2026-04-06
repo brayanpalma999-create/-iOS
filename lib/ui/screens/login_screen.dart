@@ -31,6 +31,29 @@ class _LoginScreenState extends State<LoginScreen> {
   UserRole _role = UserRole.admin;
   bool _adminVerified = false;
   bool _adminVerifying = false;
+  int _failedAttempts = 0;
+  DateTime? _cooldownUntil;
+
+  bool get _inCooldown {
+    final until = _cooldownUntil;
+    return until != null && DateTime.now().isBefore(until);
+  }
+
+  int get _cooldownSecondsLeft {
+    final until = _cooldownUntil;
+    if (until == null) return 0;
+    final diff = until.difference(DateTime.now()).inSeconds;
+    return diff < 0 ? 0 : diff;
+  }
+
+  void _recordFailedAttempt() {
+    _failedAttempts += 1;
+    if (_failedAttempts >= 3) {
+      _cooldownUntil = DateTime.now().add(const Duration(seconds: 30));
+      _failedAttempts = 0;
+    }
+    _passwordCtrl.clear();
+  }
 
   @override
   void dispose() {
@@ -51,6 +74,19 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _login() async {
+    if (_inCooldown) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            context.txt(
+              es: "Demasiados intentos. Espera ${_cooldownSecondsLeft}s antes de intentar de nuevo.",
+              en: "Too many attempts. Wait ${_cooldownSecondsLeft}s before trying again.",
+            ),
+          ),
+        ),
+      );
+      return;
+    }
     final typedIdentifier = _nameCtrl.text.trim();
     final password = _passwordCtrl.text.trim();
     if ((_role != UserRole.admin && typedIdentifier.isEmpty) ||

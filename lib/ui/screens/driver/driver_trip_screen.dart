@@ -6,6 +6,7 @@ import "../../../models/driver_model.dart";
 import "../../../models/trip_model.dart";
 import "../../../providers/driver_provider.dart";
 import "../../../providers/trip_provider.dart";
+import "../../../utils/app_text.dart";
 import "../../../utils/helpers.dart";
 import "../../widgets/custom_button.dart";
 
@@ -61,7 +62,7 @@ class DriverTripScreen extends StatelessWidget {
                 const SizedBox(height: 8),
                 Text("Destino: ${trip.destination}"),
                 const SizedBox(height: 8),
-                Text("Estado: ${statusLabel(trip.status)}"),
+                Text("Estado: ${context.statusLabel(trip.status)}"),
                 const SizedBox(height: 8),
                 Text(
                   trip.distanceMiles > 0
