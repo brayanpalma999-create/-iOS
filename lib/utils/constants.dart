@@ -60,18 +60,12 @@ class AppConstants {
     "APP_PACKAGE_ID",
     defaultValue: "com.iobuild.atob",
   );
-  static const farePerMile = double.fromEnvironment(
-    "FARE_PER_MILE",
-    defaultValue: 2.25,
-  );
-  static const minimumTripFare = double.fromEnvironment(
-    "MINIMUM_TRIP_FARE",
-    defaultValue: 8.0,
-  );
-  static const minimumFareMiles = double.fromEnvironment(
-    "MINIMUM_FARE_MILES",
-    defaultValue: 3.0,
-  );
+  static const _farePerMileRaw = String.fromEnvironment("FARE_PER_MILE");
+  static final farePerMile = double.tryParse(_farePerMileRaw) ?? 2.25;
+  static const _minimumTripFareRaw = String.fromEnvironment("MINIMUM_TRIP_FARE");
+  static final minimumTripFare = double.tryParse(_minimumTripFareRaw) ?? 8.0;
+  static const _minimumFareMilesRaw = String.fromEnvironment("MINIMUM_FARE_MILES");
+  static final minimumFareMiles = double.tryParse(_minimumFareMilesRaw) ?? 3.0;
 
   static const background = Color(0xFF050505);
   static const panel = Color(0xFF141414);
