@@ -40,7 +40,7 @@ class TelemetryService {
           category: "platform_error",
         ),
       );
-      return false;
+      return true;
     };
   }
 

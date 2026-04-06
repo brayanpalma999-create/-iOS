@@ -50,6 +50,10 @@ class AppConstants {
       "https://tile.openstreetmap.fr/hot/{z}/{x}/{y}.png";
   static const suggestionRadiusKm = 60.0;
   static const appName = "AtoB";
+  static const appPackageId = String.fromEnvironment(
+    "APP_PACKAGE_ID",
+    defaultValue: "com.example.atob_app",
+  );
   static const farePerMile = 2.25;
   static const minimumTripFare = 8.0;
   static const minimumFareMiles = 3.0;

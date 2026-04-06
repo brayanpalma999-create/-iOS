@@ -47,6 +47,8 @@ class _DriverMapState extends State<DriverMap> {
     _compassSubscription = FlutterCompass.events?.listen((event) {
       final heading = event.heading;
       if (heading == null || !mounted) return;
+      final current = _deviceHeading;
+      if (current != null && (current - heading).abs() < 2.0) return;
       setState(() => _deviceHeading = heading);
     });
   }
@@ -164,7 +166,7 @@ class _DriverMapState extends State<DriverMap> {
           retinaMode: false,
           errorTileCallback: (_, error, stackTrace) => _onTileError(error),
           evictErrorTileStrategy: EvictErrorTileStrategy.notVisibleRespectMargin,
-          userAgentPackageName: "com.example.atob_app",
+          userAgentPackageName: AppConstants.appPackageId,
           keepBuffer: _forceStableTiles ? 1 : 3,
           panBuffer: _forceStableTiles ? 0 : 2,
           maxNativeZoom: 19,

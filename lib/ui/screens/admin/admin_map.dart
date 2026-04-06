@@ -104,7 +104,7 @@ class _AdminMapState extends State<AdminMap> {
           retinaMode: false,
           errorTileCallback: (_, error, stackTrace) => _onTileError(error),
           evictErrorTileStrategy: EvictErrorTileStrategy.notVisibleRespectMargin,
-          userAgentPackageName: "com.example.atob_app",
+          userAgentPackageName: AppConstants.appPackageId,
           keepBuffer: 1,
           panBuffer: 0,
           maxNativeZoom: 19,

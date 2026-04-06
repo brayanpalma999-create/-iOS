@@ -40,23 +40,17 @@ class SocketService {
     );
 
     _socket!
-      ..onConnect((_) => _connectionState.add(true))
-      ..onDisconnect((_) => _connectionState.add(false))
-      ..onConnectError((_) => _connectionState.add(false))
-      ..onError((_) => _connectionState.add(false))
-      ..onReconnect((_) {
+      ..onConnect((_) {
+        _connectionState.add(true);
         if (_bootstrapEvent != null && _bootstrapPayload != null) {
           _socket!.emit(_bootstrapEvent!, _bootstrapPayload!);
         }
       })
+      ..onDisconnect((_) => _connectionState.add(false))
+      ..onConnectError((_) => _connectionState.add(false))
+      ..onError((_) => _connectionState.add(false))
       ..connect();
     _bindPersistentListeners();
-
-    _socket!.onConnect((_) {
-      if (_bootstrapEvent != null && _bootstrapPayload != null) {
-        _socket!.emit(_bootstrapEvent!, _bootstrapPayload!);
-      }
-    });
   }
 
   void emit(String event, dynamic payload) {

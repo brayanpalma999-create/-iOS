@@ -58,6 +58,10 @@ class RouteEstimate {
 class MapService {
   static const String _recentPlacesKey = "atob_recent_places_v1";
   static const Duration _networkTimeout = Duration(seconds: 12);
+  static const Duration _autocompleteTimeout = Duration(seconds: 5);
+  static final HttpClient _http = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 10)
+      ..idleTimeout = const Duration(seconds: 30);
 
   LatLng centerFromDrivers(List<DriverModel> drivers, {LatLng? fallback}) {
     final validDrivers = drivers
@@ -130,12 +134,10 @@ class MapService {
       "&access_token=${AppConstants.mapboxToken}",
     );
 
-    final client = HttpClient();
-    client.connectionTimeout = _networkTimeout;
     try {
-      final request = await client.getUrl(url);
+      final request = await _http.getUrl(url);
       request.headers.set(HttpHeaders.userAgentHeader, "AtoB/1.0");
-      final response = await request.close().timeout(_networkTimeout);
+      final response = await request.close().timeout(_autocompleteTimeout);
       if (response.statusCode != 200) {
         final fallback = await _autocompleteWithNominatim(
           value,
@@ -150,7 +152,7 @@ class MapService {
       final body = await response
           .transform(utf8.decoder)
           .join()
-          .timeout(_networkTimeout);
+          .timeout(_autocompleteTimeout);
       final json = jsonDecode(body);
       if (json is! Map<String, dynamic>) {
         final fallback = await _autocompleteWithNominatim(
@@ -237,8 +239,6 @@ class MapService {
       return _mergeSuggestions(recent, fallback, limit: effectiveLimit)
           .take(limit)
           .toList();
-    } finally {
-      client.close(force: true);
     }
   }
 
@@ -256,19 +256,17 @@ class MapService {
       "&limit=$limit"
       "&accept-language=es",
     );
-    final client = HttpClient();
-    client.connectionTimeout = _networkTimeout;
     try {
-      final request = await client.getUrl(url);
+      final request = await _http.getUrl(url);
       request.headers.set(HttpHeaders.userAgentHeader, "AtoB/1.0");
-      final response = await request.close().timeout(_networkTimeout);
+      final response = await request.close().timeout(_autocompleteTimeout);
       if (response.statusCode != 200) {
         return <AddressSuggestion>[];
       }
       final body = await response
           .transform(utf8.decoder)
           .join()
-          .timeout(_networkTimeout);
+          .timeout(_autocompleteTimeout);
       final json = jsonDecode(body);
       if (json is! List) {
         return <AddressSuggestion>[];
@@ -309,8 +307,6 @@ class MapService {
       );
     } catch (_) {
       return _loadRecentSuggestions(query, limit: limit, proximity: proximity);
-    } finally {
-      client.close(force: true);
     }
   }
 
@@ -414,10 +410,8 @@ class MapService {
       "&access_token=${AppConstants.mapboxToken}",
     );
 
-    final client = HttpClient();
-    client.connectionTimeout = _networkTimeout;
     try {
-      final request = await client.getUrl(url);
+      final request = await _http.getUrl(url);
       request.headers.set(HttpHeaders.userAgentHeader, "AtoB/1.0");
       final response = await request.close().timeout(_networkTimeout);
       if (response.statusCode != 200) {
@@ -479,8 +473,6 @@ class MapService {
       );
     } catch (_) {
       return null;
-    } finally {
-      client.close(force: true);
     }
   }
 
@@ -549,10 +541,8 @@ class MapService {
       "&geometries=geojson"
       "&steps=true",
     );
-    final client = HttpClient();
-    client.connectionTimeout = _networkTimeout;
     try {
-      final request = await client.getUrl(url);
+      final request = await _http.getUrl(url);
       request.headers.set(HttpHeaders.userAgentHeader, "AtoB/1.0");
       final response = await request.close().timeout(_networkTimeout);
       if (response.statusCode != 200) {
@@ -613,8 +603,6 @@ class MapService {
       );
     } catch (_) {
       return null;
-    } finally {
-      client.close(force: true);
     }
   }
 
