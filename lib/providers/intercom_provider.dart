@@ -427,7 +427,14 @@ class IntercomProvider extends ChangeNotifier {
       return;
     }
     if (volume < 8) return;
-    _markRemoteSpeaker(uid: uid);
+    // Only resolve identity when it's a new speaker; for the current speaker
+    // just refresh the busy/voice timers so we don't overwrite the name that
+    // the ptt-start signal already set.
+    if (_activeSpeakerUid != uid) {
+      _markRemoteSpeaker(uid: uid);
+    } else {
+      _channelBusy = true;
+    }
     _touchIncomingVoice();
     notifyListeners();
   }
@@ -528,10 +535,15 @@ class IntercomProvider extends ChangeNotifier {
     String? role,
   }) {
     final peer = _resolvePeerForUid(uid);
+    final sameUid = _activeSpeakerUid == uid;
     _activeSpeakerUid = uid;
-    _activeSpeakerId = id ?? peer?.id ?? "UID $uid";
-    _activeSpeakerName = name ?? peer?.name;
-    _activeSpeakerRole = role ?? peer?.role;
+    // Explicit value > peer lookup > preserve existing (same uid) > fallback
+    _activeSpeakerId =
+        id ?? peer?.id ?? (sameUid ? _activeSpeakerId : null) ?? "UID $uid";
+    _activeSpeakerName =
+        name ?? peer?.name ?? (sameUid ? _activeSpeakerName : null);
+    _activeSpeakerRole =
+        role ?? peer?.role ?? (sameUid ? _activeSpeakerRole : null);
     _channelBusy = true;
   }
 
