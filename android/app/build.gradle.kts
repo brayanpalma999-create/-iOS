@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.atob_app"
+    namespace = "com.iobuild.atob"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -22,7 +22,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.atob_app"
+        applicationId = "com.iobuild.atob"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 24

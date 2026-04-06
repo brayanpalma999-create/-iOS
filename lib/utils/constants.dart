@@ -58,7 +58,7 @@ class AppConstants {
   static const appName = "AtoB";
   static const appPackageId = String.fromEnvironment(
     "APP_PACKAGE_ID",
-    defaultValue: "com.example.atob_app",
+    defaultValue: "com.iobuild.atob",
   );
   static const farePerMile = double.fromEnvironment(
     "FARE_PER_MILE",
