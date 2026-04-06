@@ -91,9 +91,9 @@ class _DriverHomeState extends State<DriverHome> {
               ),
             ),
             Expanded(
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 260),
-                child: _tabs[_index],
+              child: IndexedStack(
+                index: _index,
+                children: _tabs,
               ),
             ),
           ],

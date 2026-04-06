@@ -13,9 +13,15 @@ class AppConstants {
   );
   static const mapboxToken = String.fromEnvironment(
     "MAPBOX_TOKEN",
-    defaultValue: "",
+    defaultValue:
+        "pk.eyJ1IjoidmJyYXlhbmM0IiwiYSI6ImNtbmI3MmpieTBweXAycHB0bG5leDlyMzYifQ.q5sbMqn7cXjar6djObTg1w",
   );
   static bool get hasMapboxToken => mapboxToken.trim().isNotEmpty;
+  static const googleMapsApiKey = String.fromEnvironment(
+    "GOOGLE_MAPS_API_KEY",
+    defaultValue: "AIzaSyCNgUX9_BNjab1KXGIybCnZuRHzqe9rN1E",
+  );
+  static bool get hasGoogleMapsApiKey => googleMapsApiKey.trim().isNotEmpty;
   static const liveKitTokenPath = "/livekit/token";
   static const supportTicketsPath = "/support/tickets";
   static const telemetryEventsPath = "/telemetry/events";

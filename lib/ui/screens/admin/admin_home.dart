@@ -118,9 +118,9 @@ class _AdminHomeState extends State<AdminHome> {
               ),
             ),
             Expanded(
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 260),
-                child: _tabs[_index],
+              child: IndexedStack(
+                index: _index,
+                children: _tabs,
               ),
             ),
           ],

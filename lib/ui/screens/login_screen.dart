@@ -201,6 +201,7 @@ class _LoginScreenState extends State<LoginScreen> {
     );
     if (_role == UserRole.admin) {
       adminProvider.connectAdmin(id: user.id, name: user.name);
+      await auth.reconcileAuthorizedDriverState();
       intercomProvider.setMode(private: false);
       if (!mounted) return;
       Navigator.of(context).pushReplacementNamed(AppRoutes.adminHome);

@@ -237,6 +237,7 @@ class AuthProvider extends ChangeNotifier {
       loginIdentifier: AuthSecurity.fixedAdminEmail,
       email: AuthSecurity.fixedAdminEmail,
     );
+    await reconcileAuthorizedDriverState();
     await warmAuthorizedDriverRecords();
   }
 
@@ -277,9 +278,36 @@ class AuthProvider extends ChangeNotifier {
     );
     final remote = await _fetchStoredAccountFromServer(accountKey);
     if (remote == null) return;
-    _storedAccounts[accountKey] = _secureStoredAccountRecord(accountKey, remote);
+    _storedAccounts[accountKey] = _mergeStoredAccountRecord(
+      accountKey,
+      _storedAccounts[accountKey],
+      remote,
+    );
     await _persistStoredAccounts();
     notifyListeners();
+  }
+
+  Future<void> reconcileAuthorizedDriverState() async {
+    await ensureLoaded();
+    var changed = false;
+    if (_restoreAuthorizedDriversFromAdminBackup()) {
+      changed = true;
+    }
+    if (_restoreAuthorizedDriversFromStoredAccounts()) {
+      changed = true;
+    }
+    if (_authorizedDrivers.isNotEmpty) {
+      await _persistAuthorizedDrivers();
+      await _restoreAuthorizedDriversOnServer();
+      await _restoreDriverAccountProfilesOnServer();
+      changed = true;
+    }
+    if (await _refreshDriverAccountProfilesFromServer()) {
+      changed = true;
+    }
+    if (changed) {
+      notifyListeners();
+    }
   }
 
   bool authorizeAdminLogin({
@@ -1295,7 +1323,11 @@ class AuthProvider extends ChangeNotifier {
     for (final remote in remoteProfiles) {
       final accountKey = remote["accountKey"]?.toString().trim() ?? "";
       if (accountKey.isEmpty) continue;
-      final secureRecord = _secureStoredAccountRecord(accountKey, remote);
+      final secureRecord = _mergeStoredAccountRecord(
+        accountKey,
+        _storedAccounts[accountKey],
+        remote,
+      );
       final currentEncoded = jsonEncode(
         _storedAccounts[accountKey] ?? const <String, dynamic>{},
       );
@@ -1533,7 +1565,11 @@ class AuthProvider extends ChangeNotifier {
     final adminKey = _adminAccountStorageKey();
     final remote = await _fetchStoredAccountFromServer(adminKey);
     if (remote == null) return;
-    _storedAccounts[adminKey] = _secureStoredAccountRecord(adminKey, remote);
+    _storedAccounts[adminKey] = _mergeStoredAccountRecord(
+      adminKey,
+      _storedAccounts[adminKey],
+      remote,
+    );
     final raw = remote["authorizedDriversBackup"];
     if (raw is! List) return;
     var restored = false;
@@ -2010,6 +2046,88 @@ class AuthProvider extends ChangeNotifier {
     current["savedAt"] =
         current["savedAt"]?.toString() ?? DateTime.now().toIso8601String();
     return current;
+  }
+
+  Map<String, dynamic> _mergeStoredAccountRecord(
+    String accountKey,
+    Map<String, dynamic>? local,
+    Map<String, dynamic>? remote,
+  ) {
+    final current = _secureStoredAccountRecord(accountKey, local);
+    final incoming = _secureStoredAccountRecord(accountKey, remote);
+    final mergedUser = <String, dynamic>{
+      ..._mapStringDynamic(current["user"]),
+      ..._mapStringDynamic(incoming["user"]),
+    };
+    final mergedBackup = _mergeDriverAccessJsonList(
+      current["authorizedDriversBackup"],
+      incoming["authorizedDriversBackup"],
+    );
+    final mergedSnapshot = _mergeDriverAccessJsonMap(
+      current["driverAccessSnapshot"],
+      incoming["driverAccessSnapshot"],
+    );
+    return _secureStoredAccountRecord(accountKey, {
+      ...current,
+      ...incoming,
+      "user": mergedUser,
+      "authorizedDriversBackup": mergedBackup,
+      "authorizedDriversUpdatedAt":
+          incoming["authorizedDriversUpdatedAt"]?.toString() ??
+          current["authorizedDriversUpdatedAt"]?.toString(),
+      "driverAccessSnapshot": mergedSnapshot,
+    });
+  }
+
+  List<Map<String, dynamic>> _mergeDriverAccessJsonList(
+    dynamic localRaw,
+    dynamic remoteRaw,
+  ) {
+    final merged = <DriverAccessProfile>[];
+    if (localRaw is List) {
+      for (final item in localRaw.whereType<Map>()) {
+        _mergeAuthorizedDriverIntoList(
+          merged,
+          DriverAccessProfile.fromJson(item.cast<String, dynamic>()),
+        );
+      }
+    }
+    if (remoteRaw is List) {
+      for (final item in remoteRaw.whereType<Map>()) {
+        _mergeAuthorizedDriverIntoList(
+          merged,
+          DriverAccessProfile.fromJson(item.cast<String, dynamic>()),
+        );
+      }
+    }
+    return merged.map((profile) => profile.toJson()).toList(growable: false);
+  }
+
+  Map<String, dynamic>? _mergeDriverAccessJsonMap(
+    dynamic localRaw,
+    dynamic remoteRaw,
+  ) {
+    final merged = <DriverAccessProfile>[];
+    if (localRaw is Map) {
+      _mergeAuthorizedDriverIntoList(
+        merged,
+        DriverAccessProfile.fromJson(localRaw.cast<String, dynamic>()),
+      );
+    }
+    if (remoteRaw is Map) {
+      _mergeAuthorizedDriverIntoList(
+        merged,
+        DriverAccessProfile.fromJson(remoteRaw.cast<String, dynamic>()),
+      );
+    }
+    if (merged.isEmpty) return null;
+    return merged.first.toJson();
+  }
+
+  Map<String, dynamic> _mapStringDynamic(dynamic raw) {
+    if (raw is Map<String, dynamic>) return raw;
+    if (raw is Map) return raw.cast<String, dynamic>();
+    return <String, dynamic>{};
   }
 
   void _ensureFixedAdminAccountSeeded() {

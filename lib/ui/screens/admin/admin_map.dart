@@ -1,5 +1,7 @@
+import "dart:async";
+
 import "package:flutter/material.dart";
-import "package:flutter_map/flutter_map.dart";
+import "package:google_maps_flutter/google_maps_flutter.dart" as gmap;
 import "package:latlong2/latlong.dart";
 import "package:provider/provider.dart";
 
@@ -9,9 +11,9 @@ import "../../../providers/trip_provider.dart";
 import "../../../services/location_service.dart";
 import "../../../services/map_service.dart";
 import "../../../utils/app_text.dart";
-import "../../../utils/constants.dart";
+import "../../../utils/google_map_config.dart";
+import "../../../utils/google_map_marker_factory.dart";
 import "../../../utils/helpers.dart";
-import "../../widgets/map_marker.dart";
 
 class AdminMap extends StatefulWidget {
   const AdminMap({super.key});
@@ -30,17 +32,36 @@ class _AdminMapState extends State<AdminMap> {
     Color(0xFFFF7A52),
   ];
 
-  final MapController _mapController = MapController();
   final Distance _distance = const Distance();
+
   bool _followFleet = true;
   double _zoom = 14;
   LatLng? _lastAutoCenter;
-  bool _forceStableTiles = false;
-  DateTime? _lastTileErrorAt;
-  int _tileErrorBurst = 0;
   bool _seededViewerLocation = false;
   LatLng? _viewerLocation;
   bool _routesExpanded = false;
+
+  gmap.GoogleMapController? _mapController;
+  LatLng? _cameraCenter;
+  DateTime? _cameraCommandUntil;
+
+  bool _mapReady = false;
+  String? _mapError;
+  int _mapReloadSeed = 0;
+  Timer? _mapWatchdogTimer;
+
+  _AdminMapScene? _currentScene;
+  String? _appliedSceneKey;
+
+  Set<gmap.Marker> _markers = <gmap.Marker>{};
+  Set<gmap.Polyline> _polylines = <gmap.Polyline>{};
+  Set<gmap.Circle> _circles = <gmap.Circle>{};
+
+  @override
+  void initState() {
+    super.initState();
+    _startMapWatchdog();
+  }
 
   @override
   void didChangeDependencies() {
@@ -48,6 +69,13 @@ class _AdminMapState extends State<AdminMap> {
     if (_seededViewerLocation) return;
     _seededViewerLocation = true;
     _primeViewerLocation();
+  }
+
+  @override
+  void dispose() {
+    _mapWatchdogTimer?.cancel();
+    _mapController?.dispose();
+    super.dispose();
   }
 
   Future<void> _primeViewerLocation() async {
@@ -59,61 +87,164 @@ class _AdminMapState extends State<AdminMap> {
         _viewerLocation = LatLng(current.latitude, current.longitude);
       });
     } catch (_) {
-      // Keep map usable even if location takes longer than expected.
+      // Keep the map usable while location warms up.
     }
   }
 
-  void _onTileError(Object error) {
-    if (!AppConstants.hasMapboxToken || _forceStableTiles) return;
-    final now = DateTime.now();
-    final last = _lastTileErrorAt;
-    if (last != null && now.difference(last) <= const Duration(seconds: 4)) {
-      _tileErrorBurst += 1;
-    } else {
-      _tileErrorBurst = 1;
-    }
-    _lastTileErrorAt = now;
-    if (_tileErrorBurst >= 4 && mounted) {
-      setState(() => _forceStableTiles = true);
+  String _mapInstanceKey(MapThemeMode mode) {
+    return "admin-map-${mode.name}-$_mapReloadSeed";
+  }
+
+  void _startMapWatchdog() {
+    _mapWatchdogTimer?.cancel();
+    _mapWatchdogTimer = Timer(const Duration(seconds: 18), () {
+      if (!mounted || _mapReady) return;
+      setState(() {
+        _mapError = context.txt(
+          es: "La conexion del mapa va lenta. Intenta mover o acercar para activarlo.",
+          en: "The map connection is slow. Try moving or zooming to wake it up.",
+        );
+      });
+    });
+  }
+
+  void _retryMap([Duration delay = const Duration(milliseconds: 200)]) {
+    _mapWatchdogTimer?.cancel();
+    Future<void>.delayed(delay, () {
+      if (!mounted) return;
+      setState(() {
+        _mapReady = false;
+        _mapError = null;
+        _appliedSceneKey = null;
+        _markers = <gmap.Marker>{};
+        _polylines = <gmap.Polyline>{};
+        _circles = <gmap.Circle>{};
+        _mapReloadSeed += 1;
+      });
+      _startMapWatchdog();
+    });
+  }
+
+  void _handleMapCreated(gmap.GoogleMapController controller) {
+    _mapController = controller;
+    _mapWatchdogTimer?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _mapReady = true;
+      _mapError = null;
+    });
+    final scene = _currentScene;
+    if (scene != null) {
+      unawaited(_applyScene(scene));
     }
   }
 
-  List<Widget> _baseLayers(MapThemeMode mode) {
-    final mapboxEnabled = AppConstants.hasMapboxToken && !_forceStableTiles;
-    final mapboxUrl = mapboxEnabled
-        ? switch (mode) {
-            MapThemeMode.flow => AppConstants.tileModernUrl,
-            MapThemeMode.dark => AppConstants.tileNightUrl,
-            MapThemeMode.satellite => AppConstants.tileSatelliteUrl,
-          }
-        : null;
-    return [
-      TileLayer(
-        urlTemplate: AppConstants.tileFallbackUrl,
-        fallbackUrl: AppConstants.tileFallbackBackupUrl,
-        retinaMode: false,
-        userAgentPackageName: "com.example.atob_app",
-        keepBuffer: 1,
-        panBuffer: 0,
-        maxNativeZoom: 19,
-      ),
-      if (mapboxUrl != null)
-        TileLayer(
-          urlTemplate: mapboxUrl,
-          fallbackUrl: AppConstants.tileFallbackBackupUrl,
-          retinaMode: false,
-          errorTileCallback: (_, error, stackTrace) => _onTileError(error),
-          evictErrorTileStrategy: EvictErrorTileStrategy.notVisibleRespectMargin,
-          userAgentPackageName: AppConstants.appPackageId,
-          keepBuffer: 1,
-          panBuffer: 0,
-          maxNativeZoom: 19,
+  void _handleCameraMoveStarted() {
+    final until = _cameraCommandUntil;
+    if (until != null && DateTime.now().isBefore(until)) {
+      return;
+    }
+    if (_followFleet && mounted) {
+      setState(() => _followFleet = false);
+    }
+  }
+
+  Future<void> _applyScene(_AdminMapScene scene) async {
+    final activeCarMarker = await GoogleMapMarkerFactory.carMarker(
+      active: true,
+      compact: true,
+    );
+    final inactiveCarMarker = await GoogleMapMarkerFactory.carMarker(
+      active: false,
+      compact: true,
+    );
+    if (!mounted || _currentScene?.key != scene.key) return;
+
+    final circles = scene.hotspots
+        .asMap()
+        .entries
+        .map(
+          (entry) => gmap.Circle(
+            circleId: gmap.CircleId("hotspot-${entry.key}"),
+            center: AppGoogleMapConfig.latLng(entry.value.center),
+            radius: 180 + (entry.value.strength * 70),
+            fillColor: const Color(0x243DDC97),
+            strokeColor: const Color(0x883DDC97),
+            strokeWidth: 1,
+          ),
+        )
+        .toSet();
+
+    final polylines = <gmap.Polyline>{};
+    for (final route in scene.routes) {
+      final points = AppGoogleMapConfig.latLngs(route.path);
+      polylines.add(
+        gmap.Polyline(
+          polylineId: gmap.PolylineId("route-shadow-${route.tripId}"),
+          points: points,
+          color: const Color(0xB0000000),
+          width: 9,
+          geodesic: false,
+          zIndex: 1,
+          startCap: gmap.Cap.roundCap,
+          endCap: gmap.Cap.roundCap,
+          jointType: gmap.JointType.round,
         ),
-    ];
+      );
+      polylines.add(
+        gmap.Polyline(
+          polylineId: gmap.PolylineId("route-${route.tripId}"),
+          points: points,
+          color: route.color,
+          width: 6,
+          geodesic: false,
+          zIndex: 2,
+          startCap: gmap.Cap.roundCap,
+          endCap: gmap.Cap.roundCap,
+          jointType: gmap.JointType.round,
+        ),
+      );
+    }
+
+    final markers = scene.drivers
+        .map(
+          (driver) => gmap.Marker(
+            markerId: gmap.MarkerId("driver-${driver.id}"),
+            position: AppGoogleMapConfig.latLng(driver.location),
+            icon: driver.isOnline ? activeCarMarker : inactiveCarMarker,
+            anchor: const Offset(0.5, 0.84),
+            flat: true,
+            zIndexInt: driver.isOnline ? 6 : 3,
+            infoWindow: gmap.InfoWindow(title: driver.label),
+          ),
+        )
+        .toSet();
+
+    if (!mounted || _currentScene?.key != scene.key) return;
+    setState(() {
+      _circles = circles;
+      _polylines = polylines;
+      _markers = markers;
+      _appliedSceneKey = scene.key;
+    });
   }
 
-  void _moveTo(LatLng point) {
-    _mapController.move(point, _zoom);
+  Future<void> _moveTo(LatLng point, {bool animated = true}) async {
+    final controller = _mapController;
+    if (controller == null) return;
+    _cameraCommandUntil = DateTime.now().add(const Duration(milliseconds: 900));
+    final update = gmap.CameraUpdate.newCameraPosition(
+      gmap.CameraPosition(
+        target: AppGoogleMapConfig.latLng(point),
+        zoom: _zoom,
+      ),
+    );
+    if (animated) {
+      await controller.animateCamera(update);
+    } else {
+      await controller.moveCamera(update);
+    }
+    _cameraCenter = point;
     _lastAutoCenter = point;
   }
 
@@ -133,8 +264,7 @@ class _AdminMapState extends State<AdminMap> {
     final points = drivers
         .where((driver) => driver.isOnline && _hasRenderableLocation(driver))
         .map(
-          (driver) =>
-              LatLng(driver.location.latitude, driver.location.longitude),
+          (driver) => LatLng(driver.location.latitude, driver.location.longitude),
         )
         .toList();
     if (points.isEmpty) return <_Hotspot>[];
@@ -160,9 +290,7 @@ class _AdminMapState extends State<AdminMap> {
       final lng =
           cluster.fold<double>(0, (sum, item) => sum + item.longitude) /
           cluster.length;
-      hotspots.add(
-        _Hotspot(center: LatLng(lat, lng), strength: cluster.length),
-      );
+      hotspots.add(_Hotspot(center: LatLng(lat, lng), strength: cluster.length));
     }
     return hotspots;
   }
@@ -171,11 +299,12 @@ class _AdminMapState extends State<AdminMap> {
   Widget build(BuildContext context) {
     String t({required String es, required String en}) =>
         context.txt(es: es, en: en);
+
     final mapTheme = context.watch<MapUiProvider>().themeMode;
     final allDrivers = context.watch<DriverProvider>().drivers;
     final renderableDrivers = allDrivers.where(_hasRenderableLocation).toList();
     final trips = context.watch<TripProvider>().trips;
-    final mapService = context.read<MapService>();
+    final mapService = MapService();
     final center = renderableDrivers.isNotEmpty
         ? mapService.centerFromDrivers(
             renderableDrivers,
@@ -222,90 +351,160 @@ class _AdminMapState extends State<AdminMap> {
         .whereType<_RouteOverlay>()
         .toList();
 
+    final driverPins = renderableDrivers
+        .map(
+          (driver) => _DriverPin(
+            id: driver.id,
+            label: compactPersonName(driver.name),
+            isOnline: driver.isOnline,
+            location: LatLng(driver.location.latitude, driver.location.longitude),
+          ),
+        )
+        .toList();
+
+    final scene = _AdminMapScene(
+      key:
+          "${driverPins.length}:$online:${activeTripRoutes.length}:${hotspots.length}:${center.latitude.toStringAsFixed(4)}:${center.longitude.toStringAsFixed(4)}",
+      drivers: driverPins,
+      routes: activeTripRoutes,
+      hotspots: hotspots,
+    );
+    _currentScene = scene;
+    if (_mapReady && scene.key != _appliedSceneKey) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_mapReady) return;
+        unawaited(_applyScene(scene));
+      });
+    }
+
     final mustMove =
         _followFleet && _shouldRecenter(center) && renderableDrivers.isNotEmpty;
     if (mustMove) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        _moveTo(center);
+        unawaited(_moveTo(center));
       });
     }
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(24),
-        child: Stack(
-          children: [
-            FlutterMap(
-              mapController: _mapController,
-              options: MapOptions(
-                initialCenter: center,
-                initialZoom: zoom,
-                maxZoom: 19,
-                onPositionChanged: (position, hasGesture) {
-                  _zoom = position.zoom;
-                  if (hasGesture && _followFleet) {
-                    setState(() => _followFleet = false);
-                  }
-                },
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: const Color(0x16000000)),
+        ),
+        child: SizedBox.expand(
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+            const ColoredBox(color: Color(0xFF091018)),
+            if (!AppGoogleMapConfig.isConfigured)
+              Positioned.fill(
+                child: Center(
+                  child: Text(
+                    t(
+                      es: "Falta configurar Google Maps.",
+                      en: "Google Maps is not configured.",
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              )
+            else
+              Positioned.fill(
+                child: RepaintBoundary(
+                  child: gmap.GoogleMap(
+                    key: ValueKey(_mapInstanceKey(mapTheme)),
+                    initialCameraPosition: gmap.CameraPosition(
+                      target: AppGoogleMapConfig.latLng(center),
+                      zoom: zoom,
+                    ),
+                    mapType: AppGoogleMapConfig.mapTypeForMode(mapTheme),
+                    style: AppGoogleMapConfig.styleForMode(mapTheme),
+                    myLocationButtonEnabled: false,
+                    zoomControlsEnabled: false,
+                    compassEnabled: false,
+                    mapToolbarEnabled: false,
+                    buildingsEnabled: true,
+                    trafficEnabled: false,
+                    indoorViewEnabled: false,
+                    rotateGesturesEnabled: true,
+                    tiltGesturesEnabled: true,
+                    markers: _markers,
+                    polylines: _polylines,
+                    circles: _circles,
+                    onMapCreated: _handleMapCreated,
+                    onCameraMoveStarted: _handleCameraMoveStarted,
+                    onCameraMove: (position) {
+                      _zoom = position.zoom;
+                      _cameraCenter = AppGoogleMapConfig.latLngFromGoogle(
+                        position.target,
+                      );
+                    },
+                  ),
+                ),
               ),
-              children: [
-                ..._baseLayers(mapTheme),
-                if (hotspots.isNotEmpty)
-                  CircleLayer(
-                    circles: hotspots
-                        .map(
-                          (hotspot) => CircleMarker(
-                            point: hotspot.center,
-                            radius: 18 + (hotspot.strength * 6),
-                            color: const Color(0x243DDC97),
-                            borderStrokeWidth: 1.4,
-                            borderColor: const Color(0x883DDC97),
-                          ),
-                        )
-                        .toList(),
-                  ),
-                if (activeTripRoutes.isNotEmpty)
-                  PolylineLayer(
-                    polylines: activeTripRoutes
-                        .expand(
-                          (route) => <Polyline>[
-                            Polyline(
-                              points: route.path,
-                              strokeWidth: 7.2,
-                              color: const Color(0xB0000000),
+            if (!_mapReady && _mapError == null)
+              const Positioned.fill(
+                child: ColoredBox(
+                  color: Color(0x16000000),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              ),
+            if (_mapError != null)
+              Positioned(
+                top: 48,
+                left: 10,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 260),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xD9161A1F),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0x2EFFFFFF)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.wifi_tethering_error_rounded,
+                          size: 15,
+                          color: Color(0xFFFFC857),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _mapError!,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 11.6,
+                              fontWeight: FontWeight.w700,
+                              height: 1.15,
                             ),
-                            Polyline(
-                              points: route.path,
-                              strokeWidth: 4.8,
-                              color: route.color.withValues(alpha: 0.96),
-                            ),
-                          ],
-                        )
-                        .toList(),
-                  ),
-                MarkerLayer(
-                  markers: renderableDrivers
-                      .map(
-                        (d) => Marker(
-                          point: LatLng(
-                            d.location.latitude,
-                            d.location.longitude,
-                          ),
-                          width: 96,
-                          height: 68,
-                          child: MapMarker(
-                            label: compactPersonName(d.name),
-                            active: d.isOnline,
-                            carMode: true,
                           ),
                         ),
-                      )
-                      .toList(),
+                        const SizedBox(width: 8),
+                        InkWell(
+                          borderRadius: BorderRadius.circular(999),
+                          onTap: () => _retryMap(Duration.zero),
+                          child: const Padding(
+                            padding: EdgeInsets.all(2),
+                            child: Icon(
+                              Icons.refresh_rounded,
+                              size: 16,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              ],
-            ),
+              ),
             Positioned(
               top: 10,
               left: 10,
@@ -318,21 +517,10 @@ class _AdminMapState extends State<AdminMap> {
                     : "${allDrivers.length} drivers | $online online",
               ),
             ),
-            if (_forceStableTiles)
-              Positioned(
-                left: 10,
-                top: 48,
-                child: _StatChip(
-                  label: t(
-                    es: "Modo mapa estable activo",
-                    en: "Stable map mode active",
-                  ),
-                ),
-              ),
             if (activeTripRoutes.isNotEmpty)
               Positioned(
                 left: 10,
-                top: _forceStableTiles ? 86 : 48,
+                top: 48,
                 child: _RouteLegend(
                   routes: activeTripRoutes,
                   isEnglish: context.isEnglish,
@@ -358,15 +546,16 @@ class _AdminMapState extends State<AdminMap> {
               child: _MapActions(
                 onZoomIn: () {
                   _zoom = (_zoom + 1).clamp(3, 19);
-                  _mapController.move(_mapController.camera.center, _zoom);
+                  unawaited(_moveTo(_cameraCenter ?? center));
                 },
                 onZoomOut: () {
                   _zoom = (_zoom - 1).clamp(3, 19);
-                  _mapController.move(_mapController.camera.center, _zoom);
+                  unawaited(_moveTo(_cameraCenter ?? center));
                 },
               ),
             ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -392,6 +581,34 @@ class _RouteOverlay {
   final String driverName;
   final Color color;
   final List<LatLng> path;
+}
+
+class _DriverPin {
+  const _DriverPin({
+    required this.id,
+    required this.label,
+    required this.isOnline,
+    required this.location,
+  });
+
+  final String id;
+  final String label;
+  final bool isOnline;
+  final LatLng location;
+}
+
+class _AdminMapScene {
+  const _AdminMapScene({
+    required this.key,
+    required this.drivers,
+    required this.routes,
+    required this.hotspots,
+  });
+
+  final String key;
+  final List<_DriverPin> drivers;
+  final List<_RouteOverlay> routes;
+  final List<_Hotspot> hotspots;
 }
 
 class _MapActions extends StatelessWidget {
@@ -609,7 +826,7 @@ class _FleetDock extends StatelessWidget {
               children: [
                 Text(
                   isEnglish ? "Active fleet" : "Flota activa",
-                  style: TextStyle(fontWeight: FontWeight.w800),
+                  style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 2),
                 Text(
