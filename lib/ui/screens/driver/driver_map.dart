@@ -7,11 +7,13 @@ import "package:flutter_map/flutter_map.dart";
 import "package:latlong2/latlong.dart";
 import "package:provider/provider.dart";
 
+import "../../../models/location_model.dart";
 import "../../../models/trip_model.dart";
 import "../../../providers/driver_provider.dart";
 import "../../../providers/map_ui_provider.dart";
 import "../../../providers/trip_provider.dart";
 import "../../../services/location_service.dart";
+import "../../../services/map_service.dart";
 import "../../../utils/app_text.dart";
 import "../../../utils/constants.dart";
 import "../../../utils/helpers.dart";
@@ -40,6 +42,9 @@ class _DriverMapState extends State<DriverMap> {
   double? _deviceHeading;
   double? _lastAppliedRotation;
   Timer? _tileRecoveryTimer;
+  DateTime? _lastRerouteAt;
+  bool _rerouting = false;
+  static const double _offRouteThresholdMeters = 80;
 
   @override
   void initState() {
@@ -79,6 +84,61 @@ class _DriverMapState extends State<DriverMap> {
     } catch (_) {
       // Avoid blocking map rendering when the first fix is still pending.
     }
+  }
+
+  void _triggerRerouteIfNeeded({
+    required TripModel activeTrip,
+    required LatLng currentPoint,
+    required double nearestMeters,
+  }) {
+    if (_rerouting) return;
+    if (nearestMeters <= _offRouteThresholdMeters) return;
+
+    final now = DateTime.now();
+    final lastAt = _lastRerouteAt;
+    if (lastAt != null && now.difference(lastAt).inSeconds < 20) return;
+
+    _rerouting = true;
+    _lastRerouteAt = now;
+
+    final destination = activeTrip.status == "picked_up"
+        ? activeTrip.destinationLocation
+        : activeTrip.originLocation;
+    if (destination == null) {
+      _rerouting = false;
+      return;
+    }
+
+    final mapService = context.read<MapService>();
+    final tripProvider = context.read<TripProvider>();
+    final tripId = activeTrip.id;
+    final dest = LatLng(destination.latitude, destination.longitude);
+
+    mapService.calculateRoute(origin: currentPoint, destination: dest).then(
+      (route) {
+        if (!mounted || route == null) {
+          _rerouting = false;
+          return;
+        }
+        final routePoints = route.path
+            .map(
+              (p) => LocationModel(latitude: p.latitude, longitude: p.longitude),
+            )
+            .toList();
+        tripProvider.updateTripNavigation(
+          tripId: tripId,
+          routePoints: routePoints,
+          routeSteps: route.steps,
+          distanceMiles: route.distanceMiles,
+          durationMinutes: route.durationMinutes,
+          fareUsd: route.fareUsd,
+        );
+        _rerouting = false;
+      },
+      onError: (_) {
+        _rerouting = false;
+      },
+    );
   }
 
   void _centerOn(LatLng point, {double? zoomOverride}) {
@@ -525,6 +585,19 @@ class _DriverMapState extends State<DriverMap> {
     final routeProgress = fullRoutePath.length > 1
         ? _buildRouteProgress(fullRoutePath, point)
         : null;
+
+    // --- Auto-reroute when driver goes off-route ---
+    if (hasStartedTrip &&
+        routeProgress != null &&
+        hasRealSelfLocation &&
+        routeProgress.nearestMeters > _offRouteThresholdMeters) {
+      _triggerRerouteIfNeeded(
+        activeTrip: activeTrip,
+        currentPoint: point,
+        nearestMeters: routeProgress.nearestMeters,
+      );
+    }
+
     final routePath = routeProgress?.remainingPath ?? fullRoutePath;
     final traveledPath = routeProgress?.traveledPath ?? const <LatLng>[];
     final routeFocusPoint = hasStartedTrip && routePath.length > 1
