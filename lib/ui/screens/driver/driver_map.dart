@@ -235,7 +235,7 @@ class _DriverMapState extends State<DriverMap> {
         markerId: const gmap.MarkerId("driver-self"),
         position: AppGoogleMapConfig.latLng(scene.point),
         icon: selfMarker,
-        anchor: const Offset(0.5, 0.84),
+        anchor: const Offset(0.5, 0.5),
         flat: true,
         rotation: scene.headingDegrees,
         zIndexInt: 10,
@@ -497,13 +497,14 @@ class _DriverMapState extends State<DriverMap> {
       return;
     }
     final last = _lastAppliedRotation;
-    if (last != null && (last - rotation).abs() < 1.8) {
+    // Rotate more responsively: threshold of 1° for smoother tracking
+    if (last != null && (last - rotation).abs() < 1.0) {
       return;
     }
     _lastAppliedRotation = rotation;
     _centerOnWithRotation(
       point,
-      zoomOverride: _zoom < 18.15 ? 18.15 : _zoom,
+      zoomOverride: _zoom < 17.0 ? 17.0 : _zoom,
       rotationOverride: rotation,
     );
   }

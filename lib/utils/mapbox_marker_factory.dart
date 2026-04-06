@@ -16,7 +16,7 @@ class MapboxMarkerFactory {
     final key = "car:${active ? "on" : "off"}:${compact ? "compact" : "full"}";
     return _cache.putIfAbsent(
       key,
-      () => _drawCarMarker(active: active, compact: compact),
+      () => _drawNavArrow(active: active, compact: compact),
     );
   }
 
@@ -32,132 +32,84 @@ class MapboxMarkerFactory {
     );
   }
 
-  static Future<Uint8List> _drawCarMarker({
+  /// Navigation arrow pointing UP (north = 0°).
+  /// Google Maps rotates it clockwise by the heading value.
+  static Future<Uint8List> _drawNavArrow({
     required bool active,
     required bool compact,
   }) async {
     final accent = active ? const Color(0xFF4EA6FF) : const Color(0xFF8D949E);
-    final deepAccent = active
-        ? const Color(0xFF1D6FE2)
-        : const Color(0xFF5A616D);
+    final deep = active ? const Color(0xFF1A5FD0) : const Color(0xFF5A616D);
     final size = compact ? const ui.Size(72, 72) : const ui.Size(88, 88);
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
-    final center = Offset(size.width / 2, size.height / 2);
-    final carWidth = compact ? 24.0 : 28.0;
-    final carHeight = compact ? 32.0 : 36.0;
+    final cx = size.width / 2;
+    final cy = size.height / 2;
 
-    final shadowPaint = Paint()
-      ..color = const Color(0x88000000)
-      ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 6);
-    canvas.drawOval(
-      Rect.fromCenter(
-        center: Offset(center.dx, size.height - 16),
-        width: compact ? 24 : 30,
-        height: compact ? 8 : 10,
-      ),
-      shadowPaint,
-    );
-
-    final glowPaint = Paint()
-      ..color = accent.withValues(alpha: 0.22)
-      ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 10);
+    // --- outer accuracy ring ---
     canvas.drawCircle(
-      Offset(center.dx, center.dy + 4),
-      compact ? 14 : 16,
-      glowPaint,
+      Offset(cx, cy),
+      compact ? 28 : 34,
+      Paint()
+        ..color = accent.withValues(alpha: 0.12)
+        ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 10),
     );
 
-    final carRect = RRect.fromRectAndRadius(
-      Rect.fromCenter(
-        center: Offset(center.dx, center.dy + 6),
-        width: carWidth,
-        height: carHeight,
-      ),
-      const Radius.circular(12),
+    // --- drop shadow ---
+    final shadowArrow = _arrowPath(cx, cy, compact).shift(const Offset(0, 2));
+    canvas.drawPath(
+      shadowArrow,
+      Paint()
+        ..color = const Color(0x55000000)
+        ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 5),
     );
-    final carPaint = Paint()
-      ..shader = ui.Gradient.linear(
-        Offset(center.dx, center.dy - 16),
-        Offset(center.dx, center.dy + 24),
-        <Color>[
-          accent.withValues(alpha: 0.98),
-          deepAccent.withValues(alpha: 0.92),
-        ],
-      );
-    canvas.drawRRect(carRect, carPaint);
-    canvas.drawRRect(
-      carRect,
+
+    // --- main arrow ---
+    final arrow = _arrowPath(cx, cy, compact);
+    canvas.drawPath(
+      arrow,
+      Paint()
+        ..shader = ui.Gradient.linear(
+          Offset(cx, cy - (compact ? 18 : 22)),
+          Offset(cx, cy + (compact ? 14 : 18)),
+          <Color>[accent, deep],
+        ),
+    );
+
+    // --- white edge highlight ---
+    canvas.drawPath(
+      arrow,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.2
-        ..color = Colors.white.withValues(alpha: 0.34),
+        ..strokeWidth = 1.4
+        ..color = Colors.white.withValues(alpha: 0.50),
     );
 
-    final windshieldRect = RRect.fromRectAndRadius(
-      Rect.fromCenter(
-        center: Offset(center.dx, center.dy - 1),
-        width: compact ? 13 : 16,
-        height: compact ? 9 : 11,
-      ),
-      const Radius.circular(6),
-    );
-    canvas.drawRRect(
-      windshieldRect,
-      Paint()..color = const Color(0xBDEAF5FF),
-    );
-
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromCenter(
-          center: Offset(center.dx, center.dy + 10),
-          width: compact ? 15 : 18,
-          height: compact ? 5 : 6,
-        ),
-        const Radius.circular(4),
-      ),
-      Paint()..color = Colors.white.withValues(alpha: 0.28),
-    );
-
-    final headlightPaint = Paint()..color = const Color(0xFFF5FDFF);
+    // --- center dot ---
     canvas.drawCircle(
-      Offset(center.dx - (compact ? 4.8 : 5.8), center.dy - 11),
-      compact ? 1.7 : 2,
-      headlightPaint,
+      Offset(cx, cy + (compact ? 2 : 3)),
+      compact ? 3.2 : 4.0,
+      Paint()..color = Colors.white.withValues(alpha: 0.92),
     );
-    canvas.drawCircle(
-      Offset(center.dx + (compact ? 4.8 : 5.8), center.dy - 11),
-      compact ? 1.7 : 2,
-      headlightPaint,
-    );
-
-    final tailPaint = Paint()..color = const Color(0xFF0B1220);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromCenter(
-          center: Offset(center.dx, center.dy + 19),
-          width: compact ? 10 : 12,
-          height: 3,
-        ),
-        const Radius.circular(999),
-      ),
-      tailPaint,
-    );
-
-    for (final dx in <double>[-8.5, 8.5]) {
-      canvas.drawCircle(
-        Offset(center.dx + dx, center.dy + 19),
-        compact ? 3.2 : 3.8,
-        Paint()..color = const Color(0xFF101010),
-      );
-      canvas.drawCircle(
-        Offset(center.dx + dx, center.dy + 19),
-        compact ? 1.6 : 1.9,
-        Paint()..color = Colors.white.withValues(alpha: 0.72),
-      );
-    }
 
     return _toPng(recorder, size);
+  }
+
+  /// Builds a chevron arrow pointing UP, centered at (cx, cy).
+  static Path _arrowPath(double cx, double cy, bool compact) {
+    final h = compact ? 30.0 : 38.0; // total height
+    final w = compact ? 24.0 : 30.0; // total width
+    final notch = h * 0.30; // depth of the rear notch
+
+    final top = cy - h / 2;
+    final bottom = cy + h / 2;
+
+    return Path()
+      ..moveTo(cx, top) // tip
+      ..lineTo(cx + w / 2, bottom) // bottom-right
+      ..lineTo(cx, bottom - notch) // inner notch
+      ..lineTo(cx - w / 2, bottom) // bottom-left
+      ..close();
   }
 
   static Future<Uint8List> _drawStopMarker({
