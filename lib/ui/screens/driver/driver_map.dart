@@ -764,6 +764,7 @@ class _DriverMapState extends State<DriverMap> {
         : null;
     final destinationEtaMinutes =
         activeTrip != null &&
+            activeTrip.status == "picked_up" &&
             routePath.length > 1 &&
             activeTrip.durationMinutes > 0 &&
             destinationPoint != null
@@ -989,7 +990,8 @@ class _DriverMapState extends State<DriverMap> {
                       ),
                     ),
                   ],
-                  if (upcomingStep != null) ...[
+                  if (upcomingStep != null &&
+                      upcomingStep.distanceMeters <= 200) ...[
                     const SizedBox(height: 8),
                     _NextTurnBanner(
                       icon: _maneuverIcon(upcomingStep.step),
@@ -1244,63 +1246,29 @@ class _NextTurnBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      constraints: const BoxConstraints(maxWidth: 300),
-      padding: const EdgeInsets.fromLTRB(10, 8, 14, 8),
+      constraints: const BoxConstraints(maxWidth: 240),
+      padding: const EdgeInsets.fromLTRB(8, 6, 10, 6),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xF0201D14), Color(0xF01A1B1E)],
-        ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0x50FF9B2F)),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x28000000),
-            blurRadius: 10,
-            offset: Offset(0, 3),
-          ),
-        ],
+        color: const Color(0xE81A1B1E),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0x40FF9B2F)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: const Color(0x30FF9B2F),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: const Color(0x50FFB257)),
-            ),
-            child: Icon(icon, size: 22, color: const Color(0xFFFFB257)),
-          ),
-          const SizedBox(width: 10),
+          Icon(icon, size: 18, color: const Color(0xFFFFB257)),
+          const SizedBox(width: 7),
           Flexible(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  _shortDistance,
-                  style: const TextStyle(
-                    color: Color(0xFFFFB257),
-                    fontWeight: FontWeight.w900,
-                    fontSize: 15,
-                    height: 1.1,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  label,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 11.5,
-                    height: 1.2,
-                    color: Colors.white70,
-                  ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
+            child: Text(
+              "$_shortDistance — $label",
+              style: const TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 11,
+                height: 1.15,
+                color: Colors.white70,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ],
