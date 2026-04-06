@@ -23,42 +23,74 @@ class SplashScreen extends StatefulWidget {
 }
 
 class _SplashScreenState extends State<SplashScreen>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-  late final Animation<double> _markScale;
-  late final Animation<double> _arrowSlide;
-  late final Animation<double> _arrowGlow;
+    with TickerProviderStateMixin {
+  late final AnimationController _entrance;
+  late final AnimationController _loop;
+
+  late final Animation<double> _logoScale;
+  late final Animation<double> _logoOpacity;
+  late final Animation<double> _textOpacity;
+  late final Animation<double> _barOpacity;
+  late final Animation<double> _shimmer;
   late final Animation<double> _haloPulse;
+
+  String _phase = "";
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
+
+    _entrance = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1550),
+      duration: const Duration(milliseconds: 1200),
+    );
+    _loop = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
     )..repeat();
 
-    _markScale = Tween<double>(
-      begin: 0.96,
-      end: 1.02,
-    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
-    _arrowSlide = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
-    _arrowGlow = Tween<double>(
-      begin: 0.25,
-      end: 1.0,
-    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
-    _haloPulse = Tween<double>(
-      begin: 0.88,
-      end: 1.08,
-    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+    _logoScale = Tween<double>(begin: 0.6, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _entrance,
+        curve: const Interval(0.0, 0.5, curve: Curves.easeOutBack),
+      ),
+    );
+    _logoOpacity = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _entrance,
+        curve: const Interval(0.0, 0.35, curve: Curves.easeOut),
+      ),
+    );
+    _textOpacity = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _entrance,
+        curve: const Interval(0.35, 0.65, curve: Curves.easeOut),
+      ),
+    );
+    _barOpacity = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _entrance,
+        curve: const Interval(0.55, 0.85, curve: Curves.easeOut),
+      ),
+    );
+    _shimmer = Tween<double>(begin: -1.0, end: 2.0).animate(
+      CurvedAnimation(parent: _loop, curve: Curves.easeInOut),
+    );
+    _haloPulse = Tween<double>(begin: 0.90, end: 1.08).animate(
+      CurvedAnimation(parent: _loop, curve: Curves.easeInOut),
+    );
 
-    Future<void>.delayed(const Duration(milliseconds: 2050), _bootstrapSession);
+    _entrance.forward();
+    Future<void>.delayed(const Duration(milliseconds: 1400), _bootstrapSession);
+  }
+
+  void _setPhase(String phase) {
+    if (!mounted) return;
+    setState(() => _phase = phase);
   }
 
   Future<void> _bootstrapSession() async {
+    _setPhase("Connecting...");
     final auth = context.read<AuthProvider>();
     final tripProvider = context.read<TripProvider>();
     final intercomProvider = context.read<IntercomProvider>();
@@ -67,6 +99,7 @@ class _SplashScreenState extends State<SplashScreen>
     final driverProvider = context.read<DriverProvider>();
     final mapUiProvider = context.read<MapUiProvider>();
 
+    _setPhase("Loading session...");
     await auth.ensureLoaded();
     if (!mounted) return;
 
@@ -75,6 +108,10 @@ class _SplashScreenState extends State<SplashScreen>
       Navigator.of(context).pushReplacementNamed(AppRoutes.login);
       return;
     }
+
+    _setPhase(user.role == UserRole.admin
+        ? "Setting up admin..."
+        : "Setting up driver...");
 
     mapUiProvider.setThemeModeFromName(user.mapThemeMode);
     chatProvider.setIdentity(
@@ -89,7 +126,9 @@ class _SplashScreenState extends State<SplashScreen>
     );
 
     if (user.role == UserRole.admin) {
+      _setPhase("Loading admin panel...");
       adminProvider.connectAdmin(id: user.id, name: user.name);
+      await auth.reconcileAuthorizedDriverState();
       await auth.refreshAdminPanelState();
       if (!mounted) return;
       intercomProvider.setMode(private: false);
@@ -97,6 +136,7 @@ class _SplashScreenState extends State<SplashScreen>
       return;
     }
 
+    _setPhase("Connecting driver...");
     await driverProvider.connectDriver(
       id: user.id,
       name: user.name,
@@ -124,6 +164,7 @@ class _SplashScreenState extends State<SplashScreen>
       isAdmin: false,
       name: user.name,
     );
+    _setPhase("Loading trips...");
     await tripProvider.refreshFromServer(driverId: resolvedId);
     if (!mounted) return;
     intercomProvider.setMode(private: false);
@@ -132,7 +173,8 @@ class _SplashScreenState extends State<SplashScreen>
 
   @override
   void dispose() {
-    _controller.dispose();
+    _entrance.dispose();
+    _loop.dispose();
     super.dispose();
   }
 
@@ -142,73 +184,123 @@ class _SplashScreenState extends State<SplashScreen>
       body: AppShell(
         child: Center(
           child: AnimatedBuilder(
-            animation: _controller,
+            animation: Listenable.merge([_entrance, _loop]),
             builder: (context, child) {
               return Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      Transform.scale(
-                        scale: _haloPulse.value,
-                        child: Container(
-                          width: 158,
-                          height: 158,
-                          decoration: const BoxDecoration(
-                            shape: BoxShape.circle,
-                            gradient: RadialGradient(
-                              colors: [
-                                Color(0x243DDC97),
-                                Color(0x103DDC97),
-                                Colors.transparent,
-                              ],
+                  Opacity(
+                    opacity: _logoOpacity.value,
+                    child: Transform.scale(
+                      scale: _logoScale.value,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          Transform.scale(
+                            scale: _haloPulse.value,
+                            child: Container(
+                              width: 190,
+                              height: 190,
+                              decoration: const BoxDecoration(
+                                shape: BoxShape.circle,
+                                gradient: RadialGradient(
+                                  colors: [
+                                    Color(0x303DDC97),
+                                    Color(0x143DDC97),
+                                    Color(0x083DDC97),
+                                    Colors.transparent,
+                                  ],
+                                  stops: [0.0, 0.4, 0.7, 1.0],
+                                ),
+                              ),
                             ),
                           ),
-                        ),
+                          const AtoBLogo(size: 108, showWordmark: false),
+                        ],
                       ),
-                      Transform.scale(
-                        scale: _markScale.value,
-                        child: const AtoBLogo(size: 118, showWordmark: true),
-                      ),
-                    ],
+                    ),
                   ),
-                  const SizedBox(height: 22),
-                  SizedBox(
-                    width: 176,
-                    height: 22,
-                    child: Stack(
-                      alignment: Alignment.centerLeft,
+                  const SizedBox(height: 20),
+                  Opacity(
+                    opacity: _textOpacity.value,
+                    child: const Column(
                       children: [
-                        Container(
-                          height: 3,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(999),
-                            color: Colors.white10,
+                        Text(
+                          "AtoB",
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 38,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: -0.8,
                           ),
                         ),
-                        Positioned(
-                          left: 128 * _arrowSlide.value,
-                          child: Opacity(
-                            opacity: _arrowGlow.value.clamp(0.0, 1.0),
-                            child: const Icon(
-                              Icons.arrow_forward_rounded,
-                              color: Color(0xFF42D0FF),
-                              size: 30,
-                            ),
+                        SizedBox(height: 3),
+                        Text(
+                          "D I S P A T C H",
+                          style: TextStyle(
+                            color: Colors.white54,
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 3.8,
                           ),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    "Loading live dispatch",
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.2,
+                  const SizedBox(height: 36),
+                  Opacity(
+                    opacity: _barOpacity.value,
+                    child: Column(
+                      children: [
+                        SizedBox(
+                          width: 200,
+                          height: 3,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(2),
+                            child: Stack(
+                              children: [
+                                Container(color: const Color(0x14FFFFFF)),
+                                Positioned.fill(
+                                  child: ShaderMask(
+                                    shaderCallback: (rect) {
+                                      return LinearGradient(
+                                        begin: Alignment(
+                                          _shimmer.value - 1,
+                                          0,
+                                        ),
+                                        end: Alignment(_shimmer.value, 0),
+                                        colors: const [
+                                          Colors.transparent,
+                                          Color(0xFF3DDC97),
+                                          Color(0xFF42D0FF),
+                                          Colors.transparent,
+                                        ],
+                                        stops: const [0.0, 0.35, 0.65, 1.0],
+                                      ).createShader(rect);
+                                    },
+                                    blendMode: BlendMode.srcIn,
+                                    child: Container(color: Colors.white),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 220),
+                          child: Text(
+                            _phase,
+                            key: ValueKey(_phase),
+                            style: const TextStyle(
+                              color: Colors.white38,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 0.3,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],

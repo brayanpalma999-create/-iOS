@@ -613,6 +613,30 @@ class _DriverMapState extends State<DriverMap> {
     return "${miles.toStringAsFixed(miles < 1 ? 1 : 0)} mi";
   }
 
+  IconData _maneuverIcon(RouteStepModel step) {
+    final type = (step.maneuverType ?? "").toLowerCase();
+    final modifier = (step.maneuverModifier ?? "").toLowerCase();
+    if (type == "arrive") return Icons.flag_rounded;
+    if (type == "roundabout") return Icons.roundabout_right_rounded;
+    if (type == "merge") return Icons.merge_rounded;
+    if (type == "fork") {
+      return modifier.contains("left")
+          ? Icons.fork_left_rounded
+          : Icons.fork_right_rounded;
+    }
+    return switch (modifier) {
+      "left" => Icons.turn_left_rounded,
+      "right" => Icons.turn_right_rounded,
+      "slight left" => Icons.turn_slight_left_rounded,
+      "slight right" => Icons.turn_slight_right_rounded,
+      "sharp left" => Icons.turn_sharp_left_rounded,
+      "sharp right" => Icons.turn_sharp_right_rounded,
+      "uturn" => Icons.u_turn_left_rounded,
+      "straight" => Icons.straight_rounded,
+      _ => Icons.navigation_rounded,
+    };
+  }
+
   String _nextStepLabel(
     _UpcomingStepPreview preview,
     String Function({required String es, required String en}) t,
@@ -966,9 +990,11 @@ class _DriverMapState extends State<DriverMap> {
                   ],
                   if (upcomingStep != null) ...[
                     const SizedBox(height: 8),
-                    _NextTurnChip(
-                      icon: Icons.turn_slight_right_rounded,
+                    _NextTurnBanner(
+                      icon: _maneuverIcon(upcomingStep.step),
                       label: _nextStepLabel(upcomingStep, t),
+                      distanceMeters: upcomingStep.distanceMeters,
+                      isEnglish: context.isEnglish,
                     ),
                   ],
                 ],
@@ -1192,35 +1218,88 @@ class _CompassChip extends StatelessWidget {
   }
 }
 
-class _NextTurnChip extends StatelessWidget {
-  const _NextTurnChip({required this.icon, required this.label});
+class _NextTurnBanner extends StatelessWidget {
+  const _NextTurnBanner({
+    required this.icon,
+    required this.label,
+    required this.distanceMeters,
+    required this.isEnglish,
+  });
 
   final IconData icon;
   final String label;
+  final double distanceMeters;
+  final bool isEnglish;
+
+  String get _shortDistance {
+    if (distanceMeters < 120) {
+      return "${distanceMeters.round()} ${isEnglish ? "ft" : "m"}";
+    }
+    final miles = distanceMeters / 1609.344;
+    if (miles < 0.2) return "${(distanceMeters * 3.28084).round()} ft";
+    return "${miles.toStringAsFixed(miles < 1 ? 1 : 0)} mi";
+  }
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      constraints: const BoxConstraints(maxWidth: 280),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      constraints: const BoxConstraints(maxWidth: 300),
+      padding: const EdgeInsets.fromLTRB(10, 8, 14, 8),
       decoration: BoxDecoration(
-        color: const Color(0xE1181B20),
+        gradient: const LinearGradient(
+          colors: [Color(0xF0201D14), Color(0xF01A1B1E)],
+        ),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0x3EFF9B2F)),
+        border: Border.all(color: const Color(0x50FF9B2F)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x28000000),
+            blurRadius: 10,
+            offset: Offset(0, 3),
+          ),
+        ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 15, color: const Color(0xFFFFB257)),
-          const SizedBox(width: 7),
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: const Color(0x30FF9B2F),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0x50FFB257)),
+            ),
+            child: Icon(icon, size: 22, color: const Color(0xFFFFB257)),
+          ),
+          const SizedBox(width: 10),
           Flexible(
-            child: Text(
-              label,
-              style: const TextStyle(
-                fontWeight: FontWeight.w800,
-                fontSize: 12,
-                height: 1.15,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _shortDistance,
+                  style: const TextStyle(
+                    color: Color(0xFFFFB257),
+                    fontWeight: FontWeight.w900,
+                    fontSize: 15,
+                    height: 1.1,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 11.5,
+                    height: 1.2,
+                    color: Colors.white70,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
             ),
           ),
         ],

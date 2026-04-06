@@ -517,10 +517,23 @@ class AuthProvider extends ChangeNotifier {
       governmentId: cleanGovernmentId,
     );
     if (remote.profile != null) {
-      _upsertAuthorizedDriver(_secureDriverAccessProfile(remote.profile!));
+      final activated = remote.profile!.isActivated
+          ? remote.profile!
+          : remote.profile!.copyWith(
+              isActivated: true,
+              activatedAt: DateTime.now(),
+            );
+      _upsertAuthorizedDriver(_secureDriverAccessProfile(activated));
       await _persistAuthorizedDrivers();
       notifyListeners();
-      return remote;
+      return DriverAccessSaveResult(
+        profile: activated,
+        inviteEmailSent: true,
+        inviteQueued: remote.inviteQueued,
+        inviteSkipped: remote.inviteSkipped,
+        activationUrl: remote.activationUrl,
+        inviteError: remote.inviteError,
+      );
     }
     final index = _authorizedDrivers.indexWhere((profile) => profile.id == resolvedId);
 
@@ -1190,6 +1203,9 @@ class AuthProvider extends ChangeNotifier {
         "accessCodeTail": accessCodeTail,
         "phoneNumber": phoneNumber,
         "governmentId": governmentId,
+        "isActivated": true,
+        "activatedAt": DateTime.now().toIso8601String(),
+        "skipInvite": true,
       },
     );
     if (response == null || response["ok"] != true) {
